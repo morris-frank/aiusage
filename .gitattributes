@@ -5,6 +5,3 @@
 # Lockfiles are generated; treat as such (cleaner diffs/reviews).
 mise.lock linguist-generated=true
 pnpm-lock.yaml linguist-generated=true
-
-# Recorded API responses used as test fixtures — generated, not hand-written.
-tests/fixtures/** linguist-generated=true
