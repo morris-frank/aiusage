@@ -1,0 +1,13 @@
+# gitleaks configuration. The default rule set applies in full; this file only
+# narrows *where* the working-tree scan looks.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Personal, gitignored local config"
+# `mise run secrets` scans the working tree, and a developer's own
+# mise.local.toml holds real keys there. That file is gitignored, so it cannot be
+# committed — but without this the working-tree scan fails on every machine that
+# has one. Scoped to that exact filename: a key committed anywhere else, or in
+# any history, is still a failure.
+paths = ['mise\.local\.toml$']
