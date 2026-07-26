@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref — CI minutes are not free.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs the exact toolchain from mise.toml/mise.lock — same as local.
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - run: pnpm install --frozen-lockfile
+
+      # The prek hooks ARE the lint gate — one definition, run identically here.
+      - run: prek run --all-files --show-diff-on-failure
+
+      - run: mise run typecheck
+
+      - run: mise run test
+
+      - run: mise run build
+
+      - run: gitleaks dir . --redact --verbose # backstop to the commit hook
+
+      - run: mise run audit

@@ -1,0 +1,52 @@
+# Run with prek (installed via mise). These hooks ARE the lint gate: CI runs the
+# same config with `prek run --all-files`, so there is one definition of checks.
+# Local hooks use `language: system` so they call the mise-managed binaries —
+# tool versions live in mise.toml / package.json, never duplicated here.
+default_stages: [pre-commit] # without this, unstaged hooks also fire on push
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^tests/fixtures/
+      - id: end-of-file-fixer
+        exclude: ^tests/fixtures/
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        # tsconfig files are JSONC by convention (comments carry the rationale);
+        # Biome validates them instead.
+        exclude: ^tsconfig(\..+)?\.json$
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: biome
+        name: biome (format + lint, autofix)
+        entry: pnpm exec biome check --write --no-errors-on-unmatched
+        language: system
+        types_or: [ts, javascript, json]
+
+      - id: typecheck
+        name: tsc --noEmit
+        entry: pnpm run typecheck
+        language: system
+        types_or: [ts]
+        pass_filenames: false # tsc typechecks the project, not single files
+
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks git --staged --redact --verbose
+        language: system
+        pass_filenames: false
+
+      # Commit hooks already covered the static checks; push runs the suite.
+      - id: tests
+        name: vitest (full suite)
+        entry: mise run test
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false

@@ -1,0 +1,55 @@
+{
+  "name": "aiusage",
+  "version": "0.1.0",
+  "description": "ccusage-shaped usage and cost reporting for remote LLM platform APIs (OpenRouter, Together AI, OpenAI, Anthropic)",
+  "keywords": [
+    "llm",
+    "usage",
+    "cost",
+    "openrouter",
+    "together",
+    "openai",
+    "anthropic",
+    "ccusage",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "Maurice Frank",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/morris-frank/aiusage.git"
+  },
+  "type": "module",
+  "bin": {
+    "aiusage": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "packageManager": "pnpm@11.15.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "biome lint .",
+    "fmt": "biome format --write .",
+    "fmt:check": "biome format .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepack": "pnpm run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.5",
+    "@types/node": "26.1.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

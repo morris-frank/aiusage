@@ -1,0 +1,21 @@
+# Secrets — never committed. Documented in .env.example, auto-loaded by mise.
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Tool caches
+.mise/
+.cache/
+coverage/
+.vitest/
+.pnpm-store/
+
+# aiusage's own on-disk pricing cache (see src/pricing/cache.ts)
+.aiusage-cache/
+
+# macOS
+.DS_Store

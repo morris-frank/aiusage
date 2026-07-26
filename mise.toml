@@ -1,0 +1,78 @@
+# mise is the single source of truth for the toolchain.
+# Exact resolved versions are recorded in mise.lock (committed).
+min_version = "2026.7.13" # refuse to run with an older mise
+
+[settings]
+lockfile = true # write mise.lock for reproducibility
+
+[tools]
+# The package targets Node's LTS-and-newer; pin the major mise installs locally.
+node = "26"
+pnpm = "11"
+# Pre-1.0 / fast-moving security tooling — churn is expected, so track latest.
+gitleaks = "latest"
+prek = "latest"        # fast Rust drop-in for pre-commit
+osv-scanner = "latest"
+
+[env]
+# Auto-load credentials for every tool invoked through mise. Both files are
+# gitignored; .env.example documents every key.
+_.file = [".env", ".env.local"]
+
+[tasks.setup]
+description = "Cold start: toolchain, frozen deps, git hooks, then verify"
+run = [
+  "mise install",
+  "pnpm install --frozen-lockfile",
+  "prek install",
+  "prek install -t pre-push",
+  "mise run check",
+]
+
+[tasks.install]
+description = "Dependency sync + hook install (no verify)"
+run = [
+  "pnpm install --frozen-lockfile",
+  "prek install",
+  "prek install -t pre-push",
+]
+
+[tasks.build]
+description = "Compile TypeScript to dist/"
+run = "pnpm run build"
+
+[tasks.lint]
+description = "Lint (Biome, no writes)"
+run = "pnpm run lint"
+
+[tasks.fmt]
+description = "Format in place (Biome)"
+run = "pnpm run fmt"
+
+[tasks."fmt:check"]
+description = "Fail if anything is unformatted"
+run = "pnpm run fmt:check"
+
+[tasks.typecheck]
+description = "Typecheck with tsc (no emit)"
+run = "pnpm run typecheck"
+
+[tasks.test]
+description = "Run the test suite once"
+run = "pnpm run test"
+
+[tasks.check]
+description = "Everything CI runs — the definition of done"
+depends = ["lint", "fmt:check", "typecheck", "test"]
+
+[tasks.hooks]
+description = "Run every git hook against the whole repo"
+run = "prek run --all-files"
+
+[tasks.audit]
+description = "Dependency vulnerability scan against the lockfile"
+run = "osv-scanner scan source --lockfile pnpm-lock.yaml"
+
+[tasks.secrets]
+description = "Scan the working tree for secrets"
+run = "gitleaks dir . --redact --verbose"
