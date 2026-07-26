@@ -14,6 +14,8 @@ npx aiusage --json                # ccusage-shaped JSON (see "JSON contract")
 npx aiusage keys                  # which API key spent what
 npx aiusage accounts --days 7     # which person spent what, last 7 days
 npx aiusage monthly -b            # months, with per-model rows
+npx aiusage --local               # platforms *and* local agents, via ccusage
+npx aiusage report --out spend.svg  # the two-panel figure
 ```
 
 ## Capability matrix
@@ -22,18 +24,36 @@ Each platform answers a different subset of the question. `aiusage` reports what
 actually get rather than flattening the differences — run `aiusage providers` to see this
 for your own credentials.
 
-| | OpenRouter | Together AI | OpenAI Platform | Claude Platform |
-|---|---|---|---|---|
-| Token usage | yes | **no API** | yes | yes |
-| Billed cost | per row | **no API** | per project-day | per model-day |
-| Split by model | yes | — | yes | yes |
-| Split by API key | with a management key | — | yes | yes |
-| Split by user account | derived from key ownership | — | yes | yes |
-| Split by workspace/project | yes | — | yes | yes |
-| Cache tokens reported | no | — | read + write | read + 5m/1h write |
-| Request counts | yes | — | yes | no |
-| Lookback | 30 days | — | unlimited | unlimited |
-| Live unit prices | `/api/v1/models` | `/v1/models` | LiteLLM table | LiteLLM table |
+| | OpenRouter | Together AI | OpenAI Platform | Claude Platform | Local (ccusage) |
+|---|---|---|---|---|---|
+| Token usage | yes | **no API** | yes | yes | yes (local logs) |
+| Cost | reported per row | **no API** | per project-day | per model-day | `imported` |
+| Split by model | yes | — | yes | yes | yes |
+| Split by API key | with a management key | — | yes | yes | no |
+| Split by user account | derived from key ownership | — | yes | yes | no |
+| Split by workspace/project | yes | — | yes | yes | no |
+| Split by agent | — | — | — | — | yes |
+| Cache tokens reported | no | — | read + write | read + 5m/1h write | read + write |
+| Request counts | yes | — | yes | no | no |
+| Lookback | 30 days | — | unlimited | unlimited | as far as the logs go |
+| Live unit prices | `/api/v1/models` | `/v1/models` | LiteLLM table | LiteLLM table | ccusage's own |
+
+**Several OpenRouter workspaces.** An OpenRouter management key is scoped to one
+workspace, so the credential is a *list*: set `OPENROUTER_MANAGEMENT_KEY_<LABEL>` once per
+workspace (or a comma-separated list in one variable). The label names that workspace in
+reports when the key sees exactly one — tagged `workspaceNameSource: "credential-label"`,
+because OpenRouter has no workspace-name API. Every key is verified with
+`GET /api/v1/key` first, so a management key pasted into `OPENROUTER_API_KEY` is still used
+as one, and a key visible to two management keys is collected once.
+
+**Local agents (`--local`).** [ccusage](https://github.com/ryoppippi/ccusage) reads the
+coding agents' own logs on this machine and prices them itself. `aiusage --local` runs it
+and fuses its rows in as a fifth source, split by **agent** (`aiusage agents`). Two things
+this changes, both stated on every run: its cost is labelled `imported`, not `reported`
+(see below), and an agent billed through an API key is also inside that platform's total —
+so the fused number can count the same traffic twice. `local-overlap-possible` says so
+whenever both are present. Subscription-billed agents (Claude Max, Codex plans) do not
+overlap.
 
 **Together AI has no usage or cost API.** Its cost analytics are dashboard-only, and the
 public API reference contains no usage, cost, billing or audit endpoint (checked
@@ -50,11 +70,16 @@ without credentials is **skipped and said so**, never reported as zero usage.
 | Variable | Platform | Notes |
 |---|---|---|
 | `OPENROUTER_API_KEY` | OpenRouter | An inference key sees only its own activity. |
-| `OPENROUTER_MANAGEMENT_KEY` | OpenRouter | Needed to split by key and account. |
+| `OPENROUTER_MANAGEMENT_KEY` | OpenRouter | Needed to split by key and account. `OPENROUTER_PROVISIONING_KEY` is accepted too. |
+| `OPENROUTER_MANAGEMENT_KEY_<LABEL>` | OpenRouter | Repeatable — one per workspace. |
 | `OPENAI_ADMIN_KEY` | OpenAI | Must be an **admin** key; project keys get 401. |
 | `OPENAI_ORG_ID` | OpenAI | Only for multi-org admin keys. |
 | `ANTHROPIC_ADMIN_KEY` | Claude | Admin API key (`sk-ant-admin…`) or org OAuth token. |
 | `TOGETHER_API_KEY` | Together | Identity and pricing only. |
+| `AIUSAGE_CCUSAGE_CMD` | Local | How to run ccusage for `--local`; discovered otherwise. |
+
+OpenAI and Anthropic remain one credential each: their admin keys are org-scoped, and
+multi-org reporting is not implemented.
 
 ## Where the money comes from
 
@@ -65,6 +90,7 @@ tool: a per-key figure that was derived must not look like one the platform bill
 |---|---|
 | `reported` | The platform billed this exact row (OpenRouter activity rows). |
 | `allocated` | The platform billed a coarser bucket — a project-day, a model-day — and that real amount was distributed across the rows inside it, in proportion to their derived cost. Platform totals stay equal to the invoice. |
+| `imported` | Restated from another tool's own calculation (ccusage, pricing local agent logs from the LiteLLM table). No platform billed it; for a subscription-billed agent it is the API-equivalent of those tokens, not money spent. |
 | `calculated` | No billed figure was available: tokens × published unit price. |
 | `unavailable` | Neither a billed figure nor a price could be found. Reported as `0` in JSON with `costSource: "unavailable"` — not as free usage. |
 | `mixed` | A row aggregates several of the above. |
@@ -143,13 +169,17 @@ aiusage [daily]                 usage grouped by day (default)
 aiusage weekly | monthly        ISO weeks (Monday-labelled) / calendar months
 aiusage models                  grouped by model, across the window
 aiusage keys | accounts | workspaces
+aiusage agents                  grouped by agent — ccusage agent names, with --local
 aiusage providers               capability matrix for your credentials
 aiusage pricing [--model <id>]  unit prices with their source
+aiusage report                  the two-panel figure (SVG, or --format html)
 ```
 
 `-j/--json` · `-s/--since <date>` · `-u/--until <date>` · `--days <n>` · `-z/--timezone <tz>`
-· `-p/--provider <list>` · `--split <model,apiKey,account,workspace,provider>` ·
-`-b/--breakdown` · `-O/--offline` · `--no-cost` · `--compact` · `--color/--no-color`.
+· `-p/--provider <list>` · `--split <model,apiKey,account,workspace,provider,agent>` ·
+`-b/--breakdown` · `--local` · `-O/--offline` · `--no-cost` · `--compact` ·
+`--color/--no-color`. `report` also takes `--out <file>`, `--format svg|html` and
+`--granularity daily|weekly|monthly`.
 
 Dates accept `YYYY-MM-DD` or `YYYYMMDD`. The default window is the trailing 30 days —
 OpenRouter's hard lookback limit, so the default is a window every platform can answer.
@@ -160,6 +190,25 @@ Exit codes: `0` success, `1` a platform failed (its rows are missing and a notic
 **Timezones.** Platforms bucket usage in UTC. With `--timezone` set to anything else,
 OpenAI and Anthropic are queried in *hourly* buckets so a local day is grouped correctly;
 OpenRouter only reports whole UTC days and emits a `timezone-approximation` warning.
+
+## The report figure
+
+`aiusage report` draws the same numbers as a two-panel figure on one shared time axis:
+period cost stacked by series on top, the cumulative total per series below with each line
+labelled at its end. Output is a self-contained SVG (no fonts, no scripts, no network), or
+a printable white page with `--format html`.
+
+```bash
+aiusage report --days 30 --out spend.svg          # series = provider
+aiusage report --local --split agent --out by-agent.svg
+aiusage report --granularity monthly --days 365 --format html --out year.html
+aiusage report --json                              # the numbers behind the figure
+```
+
+The caption is part of the deliverable: it carries the window, the cost provenance of what
+is plotted, the price sources, any source that did not fully report, and billed cost that
+is not token consumption. A figure that gets forwarded without its table should still be
+impossible to over-read.
 
 ## Library use
 
@@ -191,6 +240,12 @@ See [AGENTS.md](AGENTS.md) for the working agreement.
 - OpenRouter: no cache-token split, 30-day lookback, and account attribution is derived
   from key ownership (`tags.accountAttribution: "key-creator"`) because OpenRouter does not
   attribute an activity row to the member who made the request.
+- `--local` can double-count: local agent rows and a platform's rows may describe the same
+  traffic, and nothing in the logs says which key a session used. Warned per run, never
+  silently deduplicated.
+- Local agent rows are not re-priced: an agent log names a model but not the vendor that
+  served it, so `aiusage` reports ccusage's figure as `imported` rather than guessing a
+  vendor to look the price up under.
 - **Unresolved:** Together's `/v1/models` price unit is undocumented and its catalogue
   needs a key, so it is read as USD per million tokens with implausible values dropped.
   Verify against an invoice before relying on Together prices.

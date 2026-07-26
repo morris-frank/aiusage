@@ -4,6 +4,7 @@
  * from `cli.ts` so the test suite can drive the CLI without a process to exit.
  */
 
+import { writeFileSync } from 'node:fs';
 import { run } from './cli.js';
 
 run({
@@ -13,6 +14,7 @@ run({
   stderr: (text) => process.stderr.write(`${text}\n`),
   now: new Date(),
   isTty: process.stdout.isTTY === true,
+  writeFile: (path, content) => writeFileSync(path, content, 'utf8'),
 })
   .then((code) => {
     process.exitCode = code;

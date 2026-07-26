@@ -239,6 +239,8 @@ function dimensionHeader(dimension: DimensionReport['dimension']): string {
       return 'Workspace';
     case 'provider':
       return 'Provider';
+    case 'agent':
+      return 'Agent';
   }
 }
 

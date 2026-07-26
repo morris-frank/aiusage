@@ -12,7 +12,7 @@
  * Nothing in this package silently promotes a derived number to a reported one.
  */
 
-export const PROVIDER_IDS = ['openrouter', 'together', 'openai', 'anthropic'] as const;
+export const PROVIDER_IDS = ['openrouter', 'together', 'openai', 'anthropic', 'ccusage'] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
@@ -22,7 +22,20 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
   together: 'Together AI',
   openai: 'OpenAI Platform',
   anthropic: 'Claude Platform',
+  ccusage: 'Local agents (ccusage)',
 };
+
+/**
+ * `ccusage` is a *local* source, not a platform: it reads agent logs on this
+ * machine instead of a billing API. It is opt-in (`--local`) because its rows can
+ * describe the same traffic a platform already billed — see
+ * `providers/ccusage.ts` for the overlap it warns about.
+ */
+export const LOCAL_PROVIDER_IDS: readonly ProviderId[] = ['ccusage'];
+
+export function isLocalProvider(provider: ProviderId): boolean {
+  return LOCAL_PROVIDER_IDS.includes(provider);
+}
 
 /**
  * A named thing usage can be attributed to. `name` is null whenever the
@@ -85,6 +98,13 @@ export type UsageRecord = {
    * see `CostRecord`) or not at all.
    */
   reportedCostMicros: number | null;
+  /**
+   * How `reportedCostMicros` may be labelled. Absent means `reported`: the
+   * platform billed this amount. `imported` is for a figure restated from
+   * another tool's own calculation (ccusage prices local agent logs from the
+   * LiteLLM table) — real enough to report, never a billed amount.
+   */
+  costBasis?: 'reported' | 'imported';
   /** Provider-specific counters kept out of the normalised token fields. */
   extras: Record<string, number>;
   /**
@@ -178,6 +198,9 @@ export type ProviderIdentity = {
   projectName?: string;
   apiKeyId?: string;
   userId?: string;
+  /** Local sources: the tool that produced the rows, and which agents it saw. */
+  tool?: string;
+  agents?: string;
 };
 
 export type ProviderResult = {

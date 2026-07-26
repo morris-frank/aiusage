@@ -1,13 +1,17 @@
 /**
  * Turns measurements into money, and says exactly how.
  *
- * Four provenances, in descending order of authority — every costed record
+ * Five provenances, in descending order of authority — every costed record
  * carries the one that applies to it:
  *
  *   reported    the platform billed this exact record (OpenRouter activity rows)
  *   allocated   the platform billed a coarser bucket (a project-day, a
  *               model-day) and that real amount was distributed across the
  *               records inside it, in proportion to their derived cost
+ *   imported    another tool stated this figure and calculated it itself
+ *               (ccusage, pricing local agent logs from the LiteLLM table). No
+ *               platform billed it: for subscription-billed agents it is an
+ *               API-equivalent, not money spent
  *   calculated  no billed figure was available; tokens × published unit price
  *   unavailable neither a billed figure nor a price could be found
  *
@@ -21,7 +25,7 @@ import { allocateProportionally, MICROS_PER_USD } from './money.js';
 import type { ModelPrice, PriceBook } from './pricing/index.js';
 import type { CostRecord, Diagnostic, ProviderId, ProviderResult, UsageRecord } from './types.js';
 
-export type CostSource = 'reported' | 'allocated' | 'calculated' | 'unavailable';
+export type CostSource = 'reported' | 'allocated' | 'imported' | 'calculated' | 'unavailable';
 
 export type CostedRecord = UsageRecord & {
   costMicros: number | null;
@@ -70,13 +74,19 @@ function costProvider(
   // records with no billed figure still get an answer.
   const costed: CostedRecord[] = result.records.map((record) => {
     const derived = deriveCost(record, priceBook);
-    if (derived === null && record.model) missingPrices.add(record.model);
+    // A missing price only costs us something when nothing else states this
+    // record's cost: a row that came with its own figure is unaffected by it.
+    if (derived === null && record.model && record.reportedCostMicros === null) {
+      missingPrices.add(record.model);
+    }
 
     if (record.reportedCostMicros !== null) {
       return {
         ...record,
         costMicros: record.reportedCostMicros,
-        costSource: 'reported',
+        // A record only gets the `reported` label when a platform billed it; a
+        // figure restated from another tool says so via `costBasis`.
+        costSource: record.costBasis === 'imported' ? 'imported' : 'reported',
         priceSource: null,
       };
     }
@@ -122,8 +132,9 @@ function allocateReportedCost(
 
   const byKey = new Map<string, CostedRecord[]>();
   for (const record of costed) {
-    // Records the platform already priced are authoritative; never re-derive.
-    if (record.costSource === 'reported') continue;
+    // Records that already carry a stated figure are authoritative; never
+    // re-derive them from a coarser bucket.
+    if (record.costSource === 'reported' || record.costSource === 'imported') continue;
     for (const key of candidateKeys(record)) {
       const bucket = byKey.get(key);
       if (bucket) bucket.push(record);

@@ -8,13 +8,21 @@
  * missing platform total is not a zero.
  */
 
-import { CREDENTIAL_ENV_VARS, configuredProviders, type RuntimeConfig } from './config.js';
+import {
+  CREDENTIAL_ENV_VARS,
+  configuredProviders,
+  type LocalSourceConfig,
+  type RuntimeConfig,
+} from './config.js';
 import { HttpClient } from './http.js';
+import type { CommandRunner } from './providers/ccusage.js';
+import { localOverlapDiagnostic } from './providers/ccusage.js';
 import { createProviders, DECLARED_CAPABILITIES } from './providers/index.js';
 import type { CollectContext } from './providers/types.js';
 import {
   type DateRange,
   type Diagnostic,
+  isLocalProvider,
   NO_CAPABILITIES,
   PROVIDER_IDS,
   PROVIDER_LABELS,
@@ -30,6 +38,10 @@ export type CollectOptions = {
   only?: readonly ProviderId[];
   http?: HttpClient;
   now?: Date;
+  /** Include local agent usage (ccusage). Null leaves it out entirely. */
+  local?: LocalSourceConfig | null;
+  /** Injected process runner for the local source, so tests spawn nothing. */
+  localRunner?: CommandRunner;
 };
 
 export type Collection = {
@@ -59,9 +71,11 @@ export async function collectUsage(options: CollectOptions): Promise<Collection>
     now,
   };
 
-  const providers = createProviders(options.config.credentials).filter((provider) =>
-    requested.has(provider.id),
-  );
+  const providers = createProviders(
+    options.config.credentials,
+    options.local ?? null,
+    options.localRunner,
+  ).filter((provider) => requested.has(provider.id));
   const collected = await Promise.all(providers.map((provider) => provider.collect(context)));
 
   const results: ProviderResult[] = [];
@@ -71,13 +85,31 @@ export async function collectUsage(options: CollectOptions): Promise<Collection>
     results.push(found ?? skippedResult(id, configured.has(id)));
   }
 
+  warnAboutLocalOverlap(results);
   return { results, diagnostics: results.flatMap((result) => result.diagnostics) };
 }
 
+/**
+ * Local rows and platform rows can describe the same traffic. The warning lives
+ * on the local result so it travels with the source that caused it.
+ */
+function warnAboutLocalOverlap(results: readonly ProviderResult[]): void {
+  const local = results.find((result) => isLocalProvider(result.provider));
+  if (!local || local.records.length === 0) return;
+
+  const platforms = results
+    .filter((result) => !isLocalProvider(result.provider) && result.records.length > 0)
+    .map((result) => PROVIDER_LABELS[result.provider]);
+  if (platforms.length === 0) return;
+  local.diagnostics.push(localOverlapDiagnostic(platforms));
+}
+
 function skippedResult(provider: ProviderId, configured: boolean): ProviderResult {
-  const message = configured
-    ? `${PROVIDER_LABELS[provider]} was configured but produced no result.`
-    : `${PROVIDER_LABELS[provider]} is not configured — set ${CREDENTIAL_ENV_VARS[provider].join(' or ')} to include it. Its usage is unknown, not zero.`;
+  const message = isLocalProvider(provider)
+    ? `${PROVIDER_LABELS[provider]} is not included — pass --local to add ccusage’s rows to this report. Local agent usage is unknown, not zero.`
+    : configured
+      ? `${PROVIDER_LABELS[provider]} was configured but produced no result.`
+      : `${PROVIDER_LABELS[provider]} is not configured — set ${CREDENTIAL_ENV_VARS[provider].join(' or ')} to include it. Its usage is unknown, not zero.`;
 
   return {
     provider,

@@ -21,7 +21,7 @@ import {
   ZERO_TOKENS,
 } from './types.js';
 
-export type SplitDimension = 'model' | 'apiKey' | 'account' | 'workspace' | 'provider';
+export type SplitDimension = 'model' | 'apiKey' | 'account' | 'workspace' | 'provider' | 'agent';
 
 export const SPLIT_DIMENSIONS: readonly SplitDimension[] = [
   'model',
@@ -29,7 +29,17 @@ export const SPLIT_DIMENSIONS: readonly SplitDimension[] = [
   'account',
   'workspace',
   'provider',
+  'agent',
 ];
+
+/**
+ * The agent behind a record: ccusage knows which coding CLI ran a session; for a
+ * platform API the platform itself is the closest thing to an agent, which is
+ * also what keeps the ccusage-shaped `agent` field meaningful.
+ */
+export function agentOf(record: CostedRecord): string {
+  return record.tags.agent ?? record.provider;
+}
 
 export type CostSourceSummary = CostSource | 'mixed';
 
@@ -45,6 +55,8 @@ export type Bucket = {
   costSource: CostSourceSummary;
   providers: ProviderId[];
   models: string[];
+  /** Contributing agents (ccusage agent names, or the platform id). */
+  agents: string[];
   recordCount: number;
 };
 
@@ -88,6 +100,7 @@ type Accumulator = {
   sources: CostSource[];
   providers: Set<ProviderId>;
   models: Set<string>;
+  agents: Set<string>;
   recordCount: number;
 };
 
@@ -101,6 +114,7 @@ function newAccumulator(key: string, label: string): Accumulator {
     sources: [],
     providers: new Set(),
     models: new Set(),
+    agents: new Set(),
     recordCount: 0,
   };
 }
@@ -112,6 +126,7 @@ function accumulate(accumulator: Accumulator, record: CostedRecord): void {
   accumulator.costs.push(record.costMicros);
   accumulator.sources.push(record.costSource);
   accumulator.providers.add(record.provider);
+  accumulator.agents.add(agentOf(record));
   if (record.model) accumulator.models.add(record.model);
   accumulator.recordCount += 1;
 }
@@ -126,6 +141,7 @@ function finalize(accumulator: Accumulator): Bucket {
     costSource: summarizeCostSource(accumulator.sources),
     providers: [...accumulator.providers].sort(),
     models: [...accumulator.models].sort(),
+    agents: [...accumulator.agents].sort(),
     recordCount: accumulator.recordCount,
   };
 }
@@ -148,6 +164,10 @@ export function dimensionOf(
       return principalOf(record.workspace, 'workspace');
     case 'provider':
       return { key: record.provider, label: record.provider };
+    case 'agent': {
+      const agent = agentOf(record);
+      return { key: agent, label: agent };
+    }
   }
 }
 
@@ -233,6 +253,7 @@ export function totalsOf(buckets: readonly Bucket[]): Bucket {
     accumulator.sources.push(...expand(bucket.costSource));
     for (const provider of bucket.providers) accumulator.providers.add(provider);
     for (const model of bucket.models) accumulator.models.add(model);
+    for (const agent of bucket.agents) accumulator.agents.add(agent);
     accumulator.recordCount += bucket.recordCount;
   }
   return finalize(accumulator);

@@ -115,6 +115,67 @@ export function periodKey(
   }
 }
 
+const offsetFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function offsetFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = offsetFormatterCache.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  offsetFormatterCache.set(timeZone, formatter);
+  return formatter;
+}
+
+/** Minutes `timeZone` is ahead of UTC at `instant` (DST included). */
+function offsetMinutes(instant: Date, timeZone: string): number {
+  const parts: Record<string, number> = {};
+  for (const part of offsetFormatter(timeZone).formatToParts(instant)) {
+    if (part.type !== 'literal') parts[part.type] = Number(part.value);
+  }
+  // Some ICU builds render midnight as hour 24; both mean the same instant.
+  const hour = (parts.hour ?? 0) % 24;
+  const wallClock = Date.UTC(
+    parts.year ?? 1970,
+    (parts.month ?? 1) - 1,
+    parts.day ?? 1,
+    hour,
+    parts.minute ?? 0,
+    parts.second ?? 0,
+  );
+  return Math.round((wallClock - instant.getTime()) / 60_000);
+}
+
+/**
+ * The instant at which a calendar day starts *in `timeZone`*.
+ *
+ * Needed for sources that report a local calendar day rather than a UTC bucket
+ * (ccusage groups by the timezone it was asked for). Naively treating such a day
+ * as UTC midnight moves it a day west of UTC. Two passes so a day that begins
+ * inside a DST transition resolves to the offset in force at its own start.
+ */
+export function zonedDayStart(day: string, timeZone: string): Date {
+  const naive = new Date(`${day}T00:00:00Z`).getTime();
+  if (timeZone === 'UTC') return new Date(naive);
+  let instant = new Date(naive);
+  for (let pass = 0; pass < 2; pass += 1) {
+    instant = new Date(naive - offsetMinutes(instant, timeZone) * 60_000);
+  }
+  return instant;
+}
+
+/** Start of the day after `day`, in `timeZone` — an exclusive bucket end. */
+export function zonedDayEnd(day: string, timeZone: string): Date {
+  return zonedDayStart(addDays(day, 1), timeZone);
+}
+
 export function addDays(date: string, days: number): string {
   return toDateString(new Date(new Date(`${date}T00:00:00Z`).getTime() + days * MS_PER_DAY));
 }

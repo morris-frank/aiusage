@@ -20,11 +20,13 @@ import {
   type SplitDimension,
   totalsOf,
 } from './aggregate.js';
+import { renderReportHtml, renderReportSvg } from './chart.js';
 import { collectUsage, createHttpClient } from './collect.js';
 import { type ConfigError, loadConfig, type RuntimeConfig } from './config.js';
 import { applyCosts, type CostingResult } from './cost.js';
 import { DateInputError, defaultRange, isValidTimeZone, parseDateInput } from './dates.js';
 import { loadPriceBook, type PriceBook } from './pricing/index.js';
+import type { CommandRunner } from './providers/ccusage.js';
 import {
   type RenderOptions,
   renderDimensionReport,
@@ -36,6 +38,7 @@ import {
 import {
   buildDimensionReport,
   buildPeriodReport,
+  type PeriodReport,
   type ReportOptions,
   type ReportRow,
 } from './report.js';
@@ -50,8 +53,10 @@ const COMMANDS = [
   'keys',
   'accounts',
   'workspaces',
+  'agents',
   'providers',
   'pricing',
+  'report',
 ] as const;
 
 type Command = (typeof COMMANDS)[number];
@@ -61,6 +66,7 @@ const DIMENSION_COMMANDS: Partial<Record<Command, SplitDimension>> = {
   keys: 'apiKey',
   accounts: 'account',
   workspaces: 'workspace',
+  agents: 'agent',
 };
 
 const HELP = `aiusage ${VERSION} — usage and cost across remote LLM platform APIs
@@ -70,8 +76,10 @@ USAGE
   aiusage weekly|monthly [options]   usage grouped by ISO week / calendar month
   aiusage models [options]           usage grouped by model
   aiusage keys|accounts|workspaces   usage grouped by API key / user account / workspace
-  aiusage providers                  what each configured platform can answer
+  aiusage agents [options]           usage grouped by agent (with --local)
+  aiusage providers                  what each configured source can answer
   aiusage pricing [--model <id>]     unit prices, with their source
+  aiusage report [--out <file>]      two-panel figure (SVG, or --format html)
 
 OPTIONS
   -j, --json                 machine-readable output (ccusage-compatible shape)
@@ -82,7 +90,11 @@ OPTIONS
   -p, --provider <list>      restrict to providers: ${PROVIDER_IDS.join(',')}
       --split <list>         breakdowns to include: ${SPLIT_DIMENSIONS.join(',')} (default: model)
   -b, --breakdown            show per-model rows under each period in the table
+      --local                also run ccusage and fuse local agent usage in
   -O, --offline              price from the cached tables only; never fetch
+      --out <file>           write the figure to a file instead of stdout
+      --format <svg|html>    figure format for the report command (default: svg)
+      --granularity <g>      report grain: daily|weekly|monthly (default: daily)
       --no-cost              omit cost entirely (tokens only)
       --compact              drop secondary columns for narrow terminals
       --color / --no-color   force colour on/off (default: auto)
@@ -90,7 +102,8 @@ OPTIONS
   -v, --version              print the version
 
 CREDENTIALS (environment; a platform without them is skipped, not zeroed)
-  OPENROUTER_API_KEY, OPENROUTER_MANAGEMENT_KEY   OpenRouter
+  OPENROUTER_API_KEY, OPENROUTER_MANAGEMENT_KEY   OpenRouter — both repeatable as
+    OPENROUTER_MANAGEMENT_KEY_<LABEL> (one key per workspace) or a comma list
   OPENAI_ADMIN_KEY, OPENAI_ORG_ID                 OpenAI Platform (admin key)
   ANTHROPIC_ADMIN_KEY                             Claude Platform (admin key)
   TOGETHER_API_KEY                                Together AI (pricing + identity only)
@@ -113,6 +126,12 @@ type ParsedOptions = {
   compact: boolean;
   color: boolean;
   models: string[];
+  /** Fuse local agent usage (ccusage) into the report. */
+  local: boolean;
+  out: string | null;
+  format: 'svg' | 'html';
+  /** Only `report` sets this; other commands take their grain from the command. */
+  granularity: Granularity | null;
 };
 
 export type CliEnvironment = {
@@ -122,6 +141,10 @@ export type CliEnvironment = {
   stderr: (text: string) => void;
   now: Date;
   isTty: boolean;
+  /** Injected so `cli.ts` stays free of side effects and stays testable. */
+  writeFile?: (path: string, content: string) => void;
+  /** Injected process runner for the local source; tests spawn nothing. */
+  runCommand?: CommandRunner;
 };
 
 export async function run(environment: CliEnvironment): Promise<number> {
@@ -154,6 +177,14 @@ export async function run(environment: CliEnvironment): Promise<number> {
     only: options.providers,
     http,
     now: environment.now,
+    local: options.local
+      ? {
+          command: config.ccusageCommand,
+          offline: options.offline,
+          timeoutMs: config.timeoutMs,
+        }
+      : null,
+    ...(environment.runCommand ? { localRunner: environment.runCommand } : {}),
   });
 
   const { priceBook, diagnostics: pricingDiagnostics } = options.includeCost
@@ -171,7 +202,7 @@ export async function run(environment: CliEnvironment): Promise<number> {
   costing.diagnostics.unshift(...pricingDiagnostics);
 
   const reportOptions: ReportOptions = {
-    granularity: granularityOf(options.command),
+    granularity: granularityOf(options),
     range: options.range,
     timeZone: options.timeZone,
     splits: options.splits,
@@ -260,6 +291,11 @@ function emit(
   });
   const report = buildPeriodReport(periods, totalsOf(periods), collection, costing, reportOptions);
 
+  if (options.command === 'report') {
+    emitFigure(environment, options, report);
+    return;
+  }
+
   if (options.json) {
     environment.stdout(JSON.stringify(report, null, 2));
     return;
@@ -278,6 +314,42 @@ function emit(
     return;
   }
   environment.stdout(renderPeriodReport(report, renderOptions));
+}
+
+/**
+ * The figure. `--json` still emits the report the figure was drawn from, so the
+ * numbers behind a picture are always obtainable from the same invocation.
+ */
+function emitFigure(
+  environment: CliEnvironment,
+  options: ParsedOptions,
+  report: PeriodReport,
+): void {
+  const chartOptions = {
+    series: seriesDimension(options.splits),
+    includeCost: options.includeCost,
+  };
+  const content = options.json
+    ? JSON.stringify(report, null, 2)
+    : options.format === 'html'
+      ? renderReportHtml(report, chartOptions)
+      : renderReportSvg(report, chartOptions);
+
+  if (!options.out) {
+    environment.stdout(content);
+    return;
+  }
+  if (!environment.writeFile) {
+    environment.stderr('This build cannot write files; drop --out and redirect stdout instead.');
+    return;
+  }
+  environment.writeFile(options.out, content);
+  environment.stderr(`Wrote ${options.out}`);
+}
+
+/** Series come from the first non-model split; provider is the safe default. */
+function seriesDimension(splits: readonly SplitDimension[]): SplitDimension {
+  return splits.find((split) => split !== 'model') ?? 'provider';
 }
 
 function emitPricing(
@@ -370,10 +442,25 @@ function emitPricing(
   );
 }
 
-function granularityOf(command: Command): Granularity {
-  if (command === 'weekly') return 'weekly';
-  if (command === 'monthly') return 'monthly';
+function granularityOf(options: ParsedOptions): Granularity {
+  if (options.granularity) return options.granularity;
+  if (options.command === 'weekly') return 'weekly';
+  if (options.command === 'monthly') return 'monthly';
   return 'daily';
+}
+
+/** `report` has no daily/weekly/monthly form of its own, so it takes a flag. */
+function parseGranularity(value: string | undefined, command: Command): Granularity | null {
+  if (value === undefined) return null;
+  if (command !== 'report') {
+    throw new UsageError(
+      '--granularity only applies to `aiusage report`; use daily/weekly/monthly.',
+    );
+  }
+  if (value !== 'daily' && value !== 'weekly' && value !== 'monthly') {
+    throw new UsageError(`Unknown --granularity "${value}". Expected daily, weekly or monthly.`);
+  }
+  return value;
 }
 
 /**
@@ -389,7 +476,11 @@ const CLI_OPTIONS = {
   provider: { type: 'string', short: 'p', multiple: true },
   split: { type: 'string', multiple: true },
   breakdown: { type: 'boolean', short: 'b', default: false },
+  local: { type: 'boolean', default: false },
   offline: { type: 'boolean', short: 'O', default: false },
+  out: { type: 'string' },
+  format: { type: 'string' },
+  granularity: { type: 'string' },
   'no-cost': { type: 'boolean', default: false },
   compact: { type: 'boolean', default: false },
   color: { type: 'boolean', default: false },
@@ -433,6 +524,10 @@ export function parseCli(environment: CliEnvironment): ParsedOptions | null {
     compact: values.compact === true,
     color: values['no-color'] === true ? false : values.color === true || colorAuto(environment),
     models: values.model ?? [],
+    local: values.local === true,
+    out: values.out ?? null,
+    format: parseFormat(values.format),
+    granularity: parseGranularity(values.granularity, command),
   };
 }
 
@@ -492,9 +587,19 @@ function parseProviders(provider: string[] | undefined): ProviderId[] {
   return resolved.length > 0 ? resolved : [...PROVIDER_IDS];
 }
 
+function parseFormat(format: string | undefined): 'svg' | 'html' {
+  if (format === undefined) return 'svg';
+  if (format !== 'svg' && format !== 'html') {
+    throw new UsageError(`Unknown --format "${format}". Expected svg or html.`);
+  }
+  return format;
+}
+
 function parseSplits(split: string[] | undefined, command: Command): SplitDimension[] {
   if (!split || split.length === 0) {
-    // Model breakdowns are the ccusage-compatible default.
+    // Model breakdowns are the ccusage-compatible default; the figure also needs
+    // a series dimension, and provider is the one every source can answer.
+    if (command === 'report') return ['model', 'provider'];
     return command === 'daily' || command === 'weekly' || command === 'monthly' ? ['model'] : [];
   }
   const requested = split.flatMap((value) => value.split(',')).map((value) => value.trim());

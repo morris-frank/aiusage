@@ -61,6 +61,7 @@ export type DimensionBreakdown = {
   costSource?: CostSource | 'mixed';
   providers: string[];
   models: string[];
+  agents: string[];
   requests: number | null;
 };
 
@@ -88,6 +89,7 @@ export type ReportRow = {
   accountBreakdowns?: DimensionBreakdown[];
   workspaceBreakdowns?: DimensionBreakdown[];
   providerBreakdowns?: DimensionBreakdown[];
+  agentBreakdowns?: DimensionBreakdown[];
 };
 
 export type ReportTotals = {
@@ -161,6 +163,7 @@ const BREAKDOWN_KEY: Record<Exclude<SplitDimension, 'model'>, keyof ReportRow> =
   account: 'accountBreakdowns',
   workspace: 'workspaceBreakdowns',
   provider: 'providerBreakdowns',
+  agent: 'agentBreakdowns',
 };
 
 export function buildPeriodReport(
@@ -197,15 +200,17 @@ export function buildDimensionReport(
 
 function toRow(period: PeriodBucket, options: ReportOptions): ReportRow {
   const providers = period.providers.map(String);
+  const agents = period.agents;
   const row: ReportRow = {
-    agent: providers.length === 1 ? (providers[0] ?? 'all') : 'all',
+    // ccusage's own semantic: the agent that produced the row, `all` when several.
+    agent: agents.length === 1 ? (agents[0] ?? 'all') : 'all',
     cacheCreationTokens: period.tokens.cacheCreation,
     cacheReadTokens: period.tokens.cacheRead,
     inputTokens: period.tokens.input,
     metadata: {
-      // `agents` mirrors `providers` so ccusage-shaped consumers find the field
-      // they expect; in aiusage the platform *is* the agent.
-      agents: providers,
+      // For platform rows the platform *is* the agent; local rows carry the real
+      // agent name (`claude`, `codex`), which is what ccusage consumers expect.
+      agents,
       providers,
       costSource: period.costSource,
       requests: period.requests,
@@ -263,6 +268,7 @@ function toDimensionBreakdown(bucket: Bucket, includeCost: boolean): DimensionBr
     totalTokens: totalTokens(bucket.tokens),
     providers: bucket.providers.map(String),
     models: bucket.models,
+    agents: bucket.agents,
     requests: bucket.requests,
   };
   if (includeCost) {

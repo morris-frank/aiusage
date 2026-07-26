@@ -30,8 +30,15 @@ type LiteLlmEntry = {
 
 export type LiteLlmPayload = Record<string, LiteLlmEntry>;
 
-/** aiusage provider → the `litellm_provider` value that identifies its models. */
-const LITELLM_PROVIDER: Record<ProviderId, string> = {
+/**
+ * aiusage provider → the `litellm_provider` value that identifies its models.
+ *
+ * Deliberately partial. The local source (ccusage) has no vendor: an agent log
+ * names a model, never who served it, and ccusage has already priced those rows
+ * from this same table. Re-pricing them here would either guess a vendor or
+ * duplicate its arithmetic, so the local source has no LiteLLM lookup at all.
+ */
+const LITELLM_PROVIDER: Partial<Record<ProviderId, string>> = {
   openai: 'openai',
   anthropic: 'anthropic',
   openrouter: 'openrouter',
@@ -129,7 +136,9 @@ export function buildLiteLlmPriceBook(payload: LiteLlmPayload, source: string): 
   return {
     sources: [source],
     lookup(provider: ProviderId, model: string): PriceLookup | null {
-      const matchedKey = findKey(model, LITELLM_PROVIDER[provider]);
+      const litellmProvider = LITELLM_PROVIDER[provider];
+      if (litellmProvider === undefined) return null;
+      const matchedKey = findKey(model, litellmProvider);
       if (matchedKey === null) return null;
       const price = toModelPrice(payload[matchedKey] ?? {});
       return price ? { price, matchedKey, source } : null;

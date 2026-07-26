@@ -14,11 +14,33 @@ import type { ProviderId } from './types.js';
 
 export class ConfigError extends Error {}
 
+/**
+ * `management` keys enumerate an OpenRouter workspace's keys and read any of
+ * their activity; `inference` keys see only their own. Which kind an env var
+ * *claims* to hold is only a hint — `providers/openrouter.ts` asks
+ * `GET /api/v1/key` and reports what the key actually is.
+ */
+export type OpenRouterKeyKind = 'management' | 'inference';
+
+export type OpenRouterKey = {
+  /**
+   * Where this key came from, for messages and for naming its workspace:
+   * `OPENROUTER_MANAGEMENT_KEY_ACME` → `acme`.
+   */
+  label: string;
+  secret: string;
+  declaredKind: OpenRouterKeyKind;
+  /** True when `label` came from an env-var suffix rather than being derived. */
+  labelled: boolean;
+};
+
+/**
+ * OpenRouter credentials are a *list*: a provisioning key is scoped to one
+ * workspace, so an org spanning several workspaces needs one key per workspace
+ * (`OPENROUTER_MANAGEMENT_KEY_<LABEL>`, repeatable).
+ */
 export type OpenRouterCredentials = {
-  /** Inference key: reports its own activity. */
-  apiKey: string | null;
-  /** Management/provisioning key: enumerates keys and org-wide activity. */
-  managementKey: string | null;
+  keys: OpenRouterKey[];
 };
 
 export type OpenAICredentials = {
@@ -43,6 +65,19 @@ export type Credentials = {
   together: TogetherCredentials | null;
 };
 
+/**
+ * How to run the local-agent source. Assembled by the caller rather than read
+ * from the environment alone: `offline` is a flag, not a credential.
+ * See `providers/ccusage.ts`.
+ */
+export type LocalSourceConfig = {
+  /** Explicit argv from `AIUSAGE_CCUSAGE_CMD`; null means discover it. */
+  command: string[] | null;
+  /** Never reach the network to obtain or price with ccusage. */
+  offline: boolean;
+  timeoutMs: number;
+};
+
 export type RuntimeConfig = {
   credentials: Credentials;
   /** Where the pricing cache lives. */
@@ -52,6 +87,11 @@ export type RuntimeConfig = {
   concurrency: number;
   /** Every literal secret in play, for redaction in error paths. */
   secrets: string[];
+  /**
+   * How to run ccusage for `--local`, from `AIUSAGE_CCUSAGE_CMD`. Null means the
+   * provider discovers it (a `ccusage` on PATH, else `npx`).
+   */
+  ccusageCommand: string[] | null;
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -79,30 +119,75 @@ function defaultCacheDir(env: NodeJS.ProcessEnv): string {
   return xdg ? join(xdg, 'aiusage') : join(homedir(), '.cache', 'aiusage');
 }
 
+/**
+ * `OPENROUTER_API_KEY`, `OPENROUTER_MANAGEMENT_KEY` and
+ * `OPENROUTER_PROVISIONING_KEY` (OpenRouter's own name for a management key),
+ * each optionally suffixed with a label: `OPENROUTER_MANAGEMENT_KEY_ACME`.
+ */
+const OPENROUTER_KEY_VAR = /^OPENROUTER_(API|MANAGEMENT|PROVISIONING)_KEY(?:_([A-Z0-9_]+))?$/;
+
+/** One env var may also hold several keys, comma- or whitespace-separated. */
+function splitKeyList(value: string): string[] {
+  return value
+    .split(/[\s,]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function parseOpenRouterKeys(env: NodeJS.ProcessEnv): OpenRouterKey[] {
+  const keys: OpenRouterKey[] = [];
+  const seen = new Set<string>();
+
+  // Sorted so the key list is stable regardless of environment iteration order —
+  // it decides which credential is used first for a shared workspace.
+  for (const name of Object.keys(env).sort()) {
+    const match = OPENROUTER_KEY_VAR.exec(name);
+    if (!match) continue;
+    const value = trimmed(env[name]);
+    if (!value) continue;
+
+    const [, kindWord, suffix] = match;
+    const declaredKind: OpenRouterKeyKind = kindWord === 'API' ? 'inference' : 'management';
+    const secrets = splitKeyList(value);
+
+    secrets.forEach((secret, index) => {
+      // The same key in two variables is one key, not two: enumerating it twice
+      // would double every row it reports.
+      if (seen.has(secret)) return;
+      seen.add(secret);
+      const base = suffix ? suffix.toLowerCase() : declaredKind;
+      keys.push({
+        label: secrets.length > 1 ? `${base}-${index + 1}` : base,
+        secret,
+        declaredKind,
+        labelled: suffix !== undefined,
+      });
+    });
+  }
+  return keys;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
-  const openrouterApiKey = trimmed(env.OPENROUTER_API_KEY);
-  const openrouterManagementKey = trimmed(env.OPENROUTER_MANAGEMENT_KEY);
+  const openrouterKeys = parseOpenRouterKeys(env);
   const openaiAdminKey = trimmed(env.OPENAI_ADMIN_KEY);
   const anthropicAdminKey = trimmed(env.ANTHROPIC_ADMIN_KEY);
   const togetherApiKey = trimmed(env.TOGETHER_API_KEY);
 
   const credentials: Credentials = {
-    openrouter:
-      openrouterApiKey || openrouterManagementKey
-        ? { apiKey: openrouterApiKey, managementKey: openrouterManagementKey }
-        : null,
+    openrouter: openrouterKeys.length > 0 ? { keys: openrouterKeys } : null,
     openai: openaiAdminKey ? { adminKey: openaiAdminKey, orgId: trimmed(env.OPENAI_ORG_ID) } : null,
     anthropic: anthropicAdminKey ? { adminKey: anthropicAdminKey } : null,
     together: togetherApiKey ? { apiKey: togetherApiKey } : null,
   };
 
   const secrets = [
-    openrouterApiKey,
-    openrouterManagementKey,
+    ...openrouterKeys.map((key) => key.secret),
     openaiAdminKey,
     anthropicAdminKey,
     togetherApiKey,
   ].filter((value): value is string => value !== null);
+
+  const ccusageCommand = trimmed(env.AIUSAGE_CCUSAGE_CMD);
 
   return {
     credentials,
@@ -110,6 +195,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
     timeoutMs: positiveInt(env.AIUSAGE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 'AIUSAGE_TIMEOUT_MS'),
     concurrency: positiveInt(env.AIUSAGE_CONCURRENCY, DEFAULT_CONCURRENCY, 'AIUSAGE_CONCURRENCY'),
     secrets,
+    // Split on whitespace only: this is an argv, not a shell line — no quoting,
+    // no globbing, nothing that would need a shell to interpret it.
+    ccusageCommand: ccusageCommand ? ccusageCommand.split(/\s+/) : null,
   };
 }
 
@@ -125,8 +213,10 @@ export function configuredProviders(credentials: Credentials): ProviderId[] {
 
 /** The env var names a provider reads, for "how do I enable this" messages. */
 export const CREDENTIAL_ENV_VARS: Record<ProviderId, string[]> = {
-  openrouter: ['OPENROUTER_API_KEY', 'OPENROUTER_MANAGEMENT_KEY'],
+  openrouter: ['OPENROUTER_API_KEY', 'OPENROUTER_MANAGEMENT_KEY[_LABEL]'],
   together: ['TOGETHER_API_KEY'],
   openai: ['OPENAI_ADMIN_KEY'],
   anthropic: ['ANTHROPIC_ADMIN_KEY'],
+  // Not a credential: the local source is enabled by a flag, not by a key.
+  ccusage: [],
 };

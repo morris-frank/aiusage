@@ -11,6 +11,8 @@ import {
   periodInRange,
   periodKey,
   weekKey,
+  zonedDayEnd,
+  zonedDayStart,
 } from '../src/dates.js';
 
 describe('parseDateInput', () => {
@@ -101,5 +103,53 @@ describe('isValidTimeZone', () => {
     expect(isValidTimeZone('Europe/Berlin')).toBe(true);
     expect(isValidTimeZone('UTC')).toBe(true);
     expect(isValidTimeZone('Mars/Olympus')).toBe(false);
+  });
+});
+
+/**
+ * Sources that report a *local* calendar day (ccusage) need the instant that day
+ * began in the reporting zone; treating it as UTC midnight files a day of usage
+ * under the wrong date for every zone west of UTC.
+ */
+describe('zonedDayStart', () => {
+  it('is UTC midnight in UTC', () => {
+    expect(zonedDayStart('2026-07-25', 'UTC').toISOString()).toBe('2026-07-25T00:00:00.000Z');
+  });
+
+  it('is the local start of day in a zone behind UTC', () => {
+    expect(zonedDayStart('2026-07-25', 'America/New_York').toISOString()).toBe(
+      '2026-07-25T04:00:00.000Z',
+    );
+  });
+
+  it('is the local start of day in a zone ahead of UTC', () => {
+    expect(zonedDayStart('2026-07-25', 'Europe/Berlin').toISOString()).toBe(
+      '2026-07-24T22:00:00.000Z',
+    );
+    expect(zonedDayStart('2026-07-25', 'Asia/Tokyo').toISOString()).toBe(
+      '2026-07-24T15:00:00.000Z',
+    );
+  });
+
+  it('uses the offset in force on the day itself, across a DST change', () => {
+    // Berlin is UTC+1 in winter and UTC+2 in summer; the spring change is 2026-03-29.
+    expect(zonedDayStart('2026-03-28', 'Europe/Berlin').toISOString()).toBe(
+      '2026-03-27T23:00:00.000Z',
+    );
+    expect(zonedDayStart('2026-03-30', 'Europe/Berlin').toISOString()).toBe(
+      '2026-03-29T22:00:00.000Z',
+    );
+  });
+
+  it('ends a day where the next one starts', () => {
+    expect(zonedDayEnd('2026-07-25', 'America/New_York').toISOString()).toBe(
+      zonedDayStart('2026-07-26', 'America/New_York').toISOString(),
+    );
+  });
+
+  it('keeps a local day grouping under its own date', () => {
+    for (const zone of ['UTC', 'America/New_York', 'Europe/Berlin', 'Asia/Tokyo', 'Pacific/Apia']) {
+      expect(dayKey(zonedDayStart('2026-07-25', zone), zone)).toBe('2026-07-25');
+    }
   });
 });

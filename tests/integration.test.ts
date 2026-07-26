@@ -11,6 +11,7 @@ import {
   totalsOf,
 } from '../src/index.js';
 import { buildLiteLlmPriceBook } from '../src/pricing/litellm.js';
+import type { CommandRunner } from '../src/providers/ccusage.js';
 import { type StubRoute, stubClient } from './helpers/http.js';
 
 /**
@@ -28,7 +29,16 @@ const DAY = {
 
 const CONFIG: RuntimeConfig = {
   credentials: {
-    openrouter: { apiKey: null, managementKey: 'sk-or-v1-management' },
+    openrouter: {
+      keys: [
+        {
+          label: 'management',
+          secret: 'sk-or-v1-management',
+          declaredKind: 'management',
+          labelled: false,
+        },
+      ],
+    },
     together: { apiKey: 'together-key' },
     openai: { adminKey: 'sk-admin-key', orgId: null },
     anthropic: { adminKey: 'sk-ant-admin01-key' },
@@ -37,6 +47,7 @@ const CONFIG: RuntimeConfig = {
   timeoutMs: 1000,
   concurrency: 4,
   secrets: ['sk-admin-key', 'sk-ant-admin01-key'],
+  ccusageCommand: null,
 };
 
 const ROUTES: StubRoute[] = [
@@ -47,12 +58,17 @@ const ROUTES: StubRoute[] = [
       data: [{ hash: 'hash-a', name: 'Agents key', creator_user_id: 'or_user_1' }],
     },
   },
+  // Listed after /keys: routes match on substring, and /key is a prefix of /keys.
+  {
+    when: 'openrouter.ai/api/v1/key',
+    body: { data: { label: 'sk-or-v1-man...ent', is_management_key: true } },
+  },
   {
     when: 'openrouter.ai/api/v1/activity',
     body: {
       data: [
         {
-          date: '2026-07-25',
+          date: '2026-07-25 00:00:00',
           model: 'anthropic/claude-opus-5',
           provider_name: 'Anthropic',
           usage: 0.25,
@@ -265,7 +281,7 @@ const PRICE_BOOK = (() => {
   });
 })();
 
-async function pipeline() {
+async function pipeline(local?: { runner: CommandRunner }) {
   const { http } = stubClient(ROUTES);
   const collection = await collectUsage({
     config: CONFIG,
@@ -273,10 +289,40 @@ async function pipeline() {
     timeZone: 'UTC',
     http,
     now: NOW,
+    local: local ? { command: ['ccusage'], offline: true, timeoutMs: 1000 } : null,
+    ...(local ? { localRunner: local.runner } : {}),
   });
   const costing = applyCosts(collection.results, PRICE_BOOK);
   return { collection, costing };
 }
+
+/** A ccusage that never runs: the local rows come straight from this fixture. */
+const LOCAL_RUNNER: CommandRunner = async () => ({
+  code: 0,
+  stderr: '',
+  stdout: JSON.stringify({
+    daily: [
+      {
+        period: '2026-07-25',
+        agents: [
+          {
+            agent: 'claude',
+            modelBreakdowns: [
+              {
+                modelName: 'claude-opus-4-6',
+                inputTokens: 100,
+                outputTokens: 900,
+                cacheCreationTokens: 0,
+                cacheReadTokens: 0,
+                cost: 2,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  }),
+});
 
 describe('the whole pipeline over four platforms', () => {
   it('collects every platform that has a usage API, in a stable order', async () => {
@@ -286,6 +332,8 @@ describe('the whole pipeline over four platforms', () => {
       ['together', 'unsupported'],
       ['openai', 'ok'],
       ['anthropic', 'ok'],
+      // Local agent usage is opt-in, and its absence is stated rather than zeroed.
+      ['ccusage', 'skipped'],
     ]);
   });
 
@@ -446,5 +494,34 @@ describe('the whole pipeline over four platforms', () => {
       now: NOW,
     });
     expect(collection.results.map((result) => result.provider)).toEqual(['anthropic']);
+  });
+
+  it('fuses local agent rows in, and warns that they may be the same traffic twice', async () => {
+    const { collection, costing } = await pipeline({ runner: LOCAL_RUNNER });
+
+    const local = collection.results.find((result) => result.provider === 'ccusage');
+    expect(local?.status).toBe('ok');
+    expect(local?.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'local-overlap-possible',
+    );
+
+    const localRecords = costing.records.filter((record) => record.provider === 'ccusage');
+    // ccusage's own figure, labelled as restated rather than billed.
+    expect(localRecords.map((record) => record.costSource)).toEqual(['imported']);
+
+    const periods = aggregateByPeriod(costing.records, {
+      granularity: 'daily',
+      timeZone: 'UTC',
+      range: RANGE,
+      splits: ['model', 'agent'],
+    });
+    const day = periods.find((period) => period.key === '2026-07-25');
+    // The platform total is untouched by the local rows; the day is now mixed.
+    expect(day?.costSource).toBe('mixed');
+    expect(day?.agents).toEqual(['anthropic', 'claude', 'openai', 'openrouter']);
+    expect(day?.breakdowns.agent?.map((bucket) => [bucket.key, bucket.costMicros])).toContainEqual([
+      'claude',
+      2_000_000,
+    ]);
   });
 });

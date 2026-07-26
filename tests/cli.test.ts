@@ -9,10 +9,15 @@ import { type CliEnvironment, run } from '../src/cli.js';
  * in this file touches the network: every provider is skipped and the pricing
  * loader reads an empty temp cache.
  */
-async function environment(argv: string[], env: NodeJS.ProcessEnv = {}) {
+async function environment(
+  argv: string[],
+  env: NodeJS.ProcessEnv = {},
+  overrides: Partial<CliEnvironment> = {},
+) {
   const cacheDir = await mkdtemp(join(tmpdir(), 'aiusage-cli-'));
   const out: string[] = [];
   const err: string[] = [];
+  const written: { path: string; content: string }[] = [];
   const cli: CliEnvironment = {
     argv,
     env: { AIUSAGE_CACHE_DIR: cacheDir, NO_COLOR: '1', ...env },
@@ -20,9 +25,54 @@ async function environment(argv: string[], env: NodeJS.ProcessEnv = {}) {
     stderr: (text) => err.push(text),
     now: new Date('2026-07-26T12:00:00Z'),
     isTty: false,
+    writeFile: (path, content) => written.push({ path, content }),
+    ...overrides,
   };
-  return { cli, out, err };
+  return { cli, out, err, written };
 }
+
+/** A ccusage that never runs: its JSON is handed straight back. */
+function ccusageRunner(payload: unknown): NonNullable<CliEnvironment['runCommand']> {
+  return async () => ({ code: 0, stdout: JSON.stringify(payload), stderr: '' });
+}
+
+const CCUSAGE_PAYLOAD = {
+  daily: [
+    {
+      period: '2026-07-25',
+      agent: 'all',
+      agents: [
+        {
+          agent: 'claude',
+          modelBreakdowns: [
+            {
+              modelName: 'claude-opus-5',
+              inputTokens: 100,
+              outputTokens: 2000,
+              cacheCreationTokens: 5000,
+              cacheReadTokens: 90_000,
+              cost: 3.5,
+            },
+          ],
+        },
+        {
+          agent: 'codex',
+          modelBreakdowns: [
+            {
+              modelName: 'gpt-5.6-terra',
+              inputTokens: 4000,
+              outputTokens: 500,
+              cacheCreationTokens: 0,
+              cacheReadTokens: 20_000,
+              cost: 1.25,
+            },
+          ],
+        },
+      ],
+      metadata: { agents: ['claude', 'codex'] },
+    },
+  ],
+};
 
 let offline: string[];
 beforeEach(() => {
@@ -122,6 +172,7 @@ describe('no credentials configured', () => {
       ['together', 'skipped'],
       ['openai', 'skipped'],
       ['anthropic', 'skipped'],
+      ['ccusage', 'skipped'],
     ]);
     const notices = report.meta.notices.map((notice: { code: string }) => notice.code);
     expect(notices).toContain('not-configured');
@@ -206,7 +257,7 @@ describe('commands', () => {
     const json = await environment(['providers', '--json', ...offline]);
     expect(await run(json.cli)).toBe(0);
     const report = JSON.parse(json.out.join('\n'));
-    expect(report.providers).toHaveLength(4);
+    expect(report.providers).toHaveLength(5);
 
     const table = await environment(['providers', ...offline]);
     await run(table.cli);
@@ -284,5 +335,116 @@ describe('splits', () => {
     expect(
       JSON.parse(out.join('\n')).meta.providers.map((provider: { id: string }) => provider.id),
     ).toEqual(['openai', 'anthropic']);
+  });
+});
+
+describe('the local source and the figure', () => {
+  it('fuses local agent usage into the report only when asked', async () => {
+    const without = await environment(['--json', ...offline]);
+    await run(without.cli);
+    const skipped = JSON.parse(without.out.join('\n'));
+    expect(skipped.daily).toEqual([]);
+    expect(JSON.stringify(skipped.meta.notices)).toContain('pass --local');
+
+    const { cli, out } = await environment(
+      ['--json', '--local', ...offline],
+      {},
+      {
+        runCommand: ccusageRunner(CCUSAGE_PAYLOAD),
+      },
+    );
+    expect(await run(cli)).toBe(0);
+    const report = JSON.parse(out.join('\n'));
+
+    expect(report.daily).toHaveLength(1);
+    expect(report.daily[0].period).toBe('2026-07-25');
+    expect(report.totals.totalCost).toBeCloseTo(4.75, 6);
+    // ccusage calculated this cost, so the report says `imported`, not `reported`.
+    expect(report.totals.costSource).toBe('imported');
+    expect(report.daily[0].metadata.agents).toEqual(['claude', 'codex']);
+  });
+
+  it('groups local usage by agent', async () => {
+    const { cli, out } = await environment(
+      ['agents', '--json', '--local', ...offline],
+      {},
+      {
+        runCommand: ccusageRunner(CCUSAGE_PAYLOAD),
+      },
+    );
+    expect(await run(cli)).toBe(0);
+    const report = JSON.parse(out.join('\n'));
+    expect(report.dimension).toBe('agent');
+    expect(report.rows.map((row: { id: string; cost: number }) => [row.id, row.cost])).toEqual([
+      ['claude', 3.5],
+      ['codex', 1.25],
+    ]);
+  });
+
+  it('writes the figure to a file, with the series it was asked for', async () => {
+    const { cli, err, written } = await environment(
+      ['report', '--local', '--split', 'agent', '--out', 'figure.svg', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(err.join('\n')).toContain('Wrote figure.svg');
+    expect(written).toHaveLength(1);
+    expect(written[0]?.path).toBe('figure.svg');
+    expect(written[0]?.content.startsWith('<svg')).toBe(true);
+    expect(written[0]?.content).toContain('LLM spend by agent');
+    expect(written[0]?.content).toContain('claude');
+  });
+
+  it('emits the figure on stdout, as HTML when asked', async () => {
+    const { cli, out } = await environment(
+      ['report', '--local', '--format', 'html', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(out.join('\n').startsWith('<!doctype html>')).toBe(true);
+  });
+
+  it('still emits the numbers behind the figure with --json', async () => {
+    const { cli, out } = await environment(
+      ['report', '--local', '--json', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    const report = JSON.parse(out.join('\n'));
+    expect(report.daily[0].providerBreakdowns[0].id).toBe('ccusage');
+  });
+
+  it('takes a report grain from --granularity, and nowhere else', async () => {
+    const good = await environment(
+      ['report', '--granularity', 'monthly', '--json', '--local', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(good.cli)).toBe(0);
+    expect(JSON.parse(good.out.join('\n')).monthly[0].period).toBe('2026-07');
+
+    const bad = await environment(['daily', '--granularity', 'monthly']);
+    expect(await run(bad.cli)).toBe(2);
+    expect(bad.err.join('\n')).toContain('--granularity only applies');
+  });
+
+  it('reports a missing ccusage as an error exit, not as no local usage', async () => {
+    const { cli, out } = await environment(
+      ['--json', '--local', ...offline],
+      {},
+      {
+        runCommand: async () => {
+          throw Object.assign(new Error('nope'), { code: 'ENOENT' });
+        },
+      },
+    );
+    expect(await run(cli)).toBe(1);
+    const report = JSON.parse(out.join('\n'));
+    expect(report.meta.notices.map((notice: { code: string }) => notice.code)).toContain(
+      'local-tool-unavailable',
+    );
   });
 });
