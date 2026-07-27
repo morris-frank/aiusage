@@ -18,6 +18,14 @@
  *   3. **It is another program's output.** ccusage is executed as a subprocess
  *      with a fixed argument list, its JSON is parsed defensively, and a failure
  *      makes the source `error` — never a silent zero.
+ *
+ * `daily --by-agent` is deliberately the only ccusage command this uses: it is
+ * the one that buckets by the actual day tokens were used, not by a session's
+ * own start/end. A `session`-based collection would also expose which project
+ * a session ran in, but was measured (2026-07-27, ccusage 20.0.18) to move a
+ * 27-day window's total by ~16% — a real accuracy cost for a project split
+ * that, on this machine, only ever appears for a third-party agent and never
+ * for Claude Code or Codex sessions. Not worth it: `daily`'s exact totals win.
  */
 
 import { execFile } from 'node:child_process';

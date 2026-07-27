@@ -15,7 +15,7 @@ npx aiusage keys                  # which API key spent what
 npx aiusage accounts --days 7     # which person spent what, last 7 days
 npx aiusage monthly -b            # months, with per-model rows
 npx aiusage --local               # platforms *and* local agents, via ccusage
-npx aiusage report --out spend.svg  # the two-panel figure
+npx aiusage report --out spend.svg  # the report figure
 ```
 
 ## Capability matrix
@@ -54,6 +54,12 @@ this changes, both stated on every run: its cost is labelled `imported`, not `re
 so the fused number can count the same traffic twice. `local-overlap-possible` says so
 whenever both are present. Subscription-billed agents (Claude Max, Codex plans) do not
 overlap.
+
+ccusage collection deliberately uses `daily`, not `session`: `session` also exposes which
+project a session ran in, but its bucketing is coarser (a session's tokens land entirely
+on its last-activity day) — measured on one machine, that shifted a 27-day window's total
+by about 16% for no real gain, since ccusage only reports project paths for some agents in
+the first place. `daily`'s exact day-bucketed totals win.
 
 **Together AI has no usage or cost API.** Its cost analytics are dashboard-only, and the
 public API reference contains no usage, cost, billing or audit endpoint (checked
@@ -172,17 +178,23 @@ aiusage keys | accounts | workspaces
 aiusage agents                  grouped by agent — ccusage agent names, with --local
 aiusage providers               capability matrix for your credentials
 aiusage pricing [--model <id>]  unit prices with their source
-aiusage report                  the two-panel figure (SVG, or --format html)
+aiusage report                  the report figure — 90-day window, --local implied
 ```
 
 `-j/--json` · `-s/--since <date>` · `-u/--until <date>` · `--days <n>` · `-z/--timezone <tz>`
 · `-p/--provider <list>` · `--split <model,apiKey,account,workspace,provider,agent>` ·
 `-b/--breakdown` · `--local` · `-O/--offline` · `--no-cost` · `--compact` ·
-`--color/--no-color`. `report` also takes `--out <file>`, `--format svg|html` and
+`--color/--no-color`. `report` also takes `--out <file>`, `--format svg|html`, `--print` and
 `--granularity daily|weekly|monthly`.
 
+`report` fuses local agent usage by default — it's usually a person looking at their own
+machine's whole picture — and defaults to writing an HTML file to `~/Downloads` (named after
+the report's date range) rather than stdout. `--no-local` drops the local fusion; `--print`
+opts back out to stdout; an explicit `--out` always wins; `--json` is unaffected either way.
+
 Dates accept `YYYY-MM-DD` or `YYYYMMDD`. The default window is the trailing 30 days —
-OpenRouter's hard lookback limit, so the default is a window every platform can answer.
+OpenRouter's hard lookback limit, so the default is a window every platform can answer —
+except for `report`, which defaults to 90 days so a daily figure has enough of a trend to draw.
 
 Exit codes: `0` success, `1` a platform failed (its rows are missing and a notice says so),
 `2` bad invocation.
@@ -199,7 +211,12 @@ OpenRouter only reports whole UTC days and emits a `timezone-approximation` warn
 2. **cumulative cost** per series, each line labelled at its end point;
 3. **tokens per period**, stacked by the same series — where the volume went is rarely the
    same shape as where the money went;
-4. **token mix**, the share of each period that was uncached input, output, cache write and
+4. **top models**, ranked by cost (or tokens) as a dot chart — position along a shared scale,
+   not area or a colour ramp — coloured by the *provider* that served each model rather than
+   a per-model hue; the tail beyond the top few folds into a disclosed "Other N models" row,
+   and a model billed under more than one provider gets the neutral mark instead of either
+   provider's colour;
+5. **token mix**, the share of each period that was uncached input, output, cache write and
    cache read, so a change in caching shows up on its own axis.
 
 With `--no-cost` the two cost panels are dropped rather than faked, and the token panels

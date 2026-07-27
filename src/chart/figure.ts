@@ -13,6 +13,20 @@
  *     so this one is normalised: it answers "what kind of tokens", and a caching
  *     change shows up here first.
  *
+ * A fifth panel, **top models**, answers a different question from the series
+ * panels above: not "how did this move over time" but "which model, ranked".
+ * Model is a high-cardinality categorical nested under provider (a handful of
+ * providers, dozens of models), so it gets a dot chart — position along a
+ * common scale, Cleveland & McGill's most accurate elementary task, ranked
+ * order being exactly what pie/treemap/bubble-area encodings are worse at —
+ * rather than a 16-colour legend no reader can hold in working memory. Colour
+ * on that panel is the *provider* that served the model, reusing the same
+ * vendor palette as everywhere else, not a new per-model hue. The tail beyond
+ * the top few is folded into a disclosed "Other N models" row rather than cut
+ * silently, and a model billed under more than one provider (routed at reduced
+ * fidelity) gets the neutral mark instead of either provider's colour, so that
+ * ambiguity is shown rather than hidden.
+ *
  * Measures on different scales get their own panel, never a second y-axis.
  *
  * Provenance is part of the figure, not an afterthought: the caption states the
@@ -28,7 +42,7 @@
 
 import type { SplitDimension } from '../aggregate.js';
 import { formatUsd } from '../money.js';
-import type { DimensionBreakdown, PeriodReport, ReportRow } from '../report.js';
+import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../report.js';
 import {
   escapeXml,
   SERIES_COLOURS,
@@ -70,14 +84,33 @@ type Measure = 'cost' | 'tokens';
 type PanelSpec =
   | { kind: 'stacked'; id: string; title: string; measure: Measure }
   | { kind: 'cumulative'; id: string; title: string; measure: Measure }
-  | { kind: 'mix'; id: string; title: string };
+  | { kind: 'mix'; id: string; title: string }
+  | { kind: 'ranked'; id: string; title: string; measure: Measure; models: RankedModel[] };
 
 type Box = { top: number; bottom: number };
+
+/** One row of the top-models dot chart: a model, ranked, marked by agent. */
+type RankedModel = {
+  label: string;
+  vendor: VendorId;
+  value: number;
+  agents: string[];
+  /** This exact model was run under more than one agent. */
+  mixedAgent: boolean;
+  /** This row is the collapsed tail, not a real model. */
+  isOther: boolean;
+  /** Only set on the `isOther` row: how many models it folds in. */
+  tailCount?: number;
+};
 
 const LEFT = 76;
 const RIGHT_MARGIN = 168; // room for the end labels of the cumulative lines
 const PANEL_HEIGHT = 150;
 const PANEL_GAP = 74;
+const RANK_ROW_HEIGHT = 22;
+const RANK_CAPACITY = 8;
+/** Room for the model label and its vendor mark, left of the dot chart's axis. */
+const RANK_LEFT_MARGIN = 210;
 
 const BREAKDOWN_KEY: Record<SplitDimension, keyof ReportRow> = {
   model: 'modelBreakdowns',
@@ -102,18 +135,26 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const width = options.width ?? 960;
   const right = width - RIGHT_MARGIN;
   const series = buildSeries(rows, options);
-  const panels = panelSpecs(report, options);
+  const rankedModels = buildModelRanking(rows, options.includeCost ? 'cost' : 'tokens');
+  const panels = panelSpecs(report, options, rankedModels);
 
   const withHeader = options.header !== false;
   const legendRows = Math.max(1, Math.ceil(series.length / 4));
   const legendTop = withHeader ? 126 : 30;
   const firstPanelTop = legendTop + legendRows * 22 + 30;
-  const boxes = panels.map((_spec, index) => ({
-    top: firstPanelTop + index * (PANEL_HEIGHT + PANEL_GAP),
-    bottom: firstPanelTop + index * (PANEL_HEIGHT + PANEL_GAP) + PANEL_HEIGHT,
-  }));
+  const boxes: Box[] = [];
+  let panelTop = firstPanelTop;
+  for (const spec of panels) {
+    const panelHeight =
+      spec.kind === 'ranked' ? rankedPanelHeight(spec.models.length) : PANEL_HEIGHT;
+    boxes.push({ top: panelTop, bottom: panelTop + panelHeight });
+    panelTop += panelHeight + PANEL_GAP;
+  }
   const captionTop = (boxes.at(-1)?.bottom ?? firstPanelTop) + 58;
-  const captionText = wrapAll(captionLines(report, options, series), width - LEFT * 2);
+  const captionText = wrapAll(
+    captionLines(report, options, series, rankedModels),
+    width - LEFT * 2,
+  );
   const height = captionTop + captionText.length * 15 + 16;
 
   const parts: string[] = [
@@ -138,7 +179,11 @@ export function periodsOf(report: PeriodReport): ReportRow[] {
   return report.daily ?? report.weekly ?? report.monthly ?? [];
 }
 
-function panelSpecs(report: PeriodReport, options: ChartOptions): PanelSpec[] {
+function panelSpecs(
+  report: PeriodReport,
+  options: ChartOptions,
+  rankedModels: readonly RankedModel[],
+): PanelSpec[] {
   const cadence = cadenceOf(report);
   const specs: PanelSpec[] = [];
   if (options.includeCost) {
@@ -171,8 +216,24 @@ function panelSpecs(report: PeriodReport, options: ChartOptions): PanelSpec[] {
       measure: 'tokens',
     });
   }
+  // A ranking needs at least two models to rank; with zero or one, the panel
+  // above already says everything it could.
+  if (rankedModels.length > 1) {
+    const measure: Measure = options.includeCost ? 'cost' : 'tokens';
+    specs.push({
+      kind: 'ranked',
+      id: 'model-rank',
+      title: `Top models by ${measure === 'cost' ? 'cost' : 'tokens'}`,
+      measure,
+      models: [...rankedModels],
+    });
+  }
   specs.push({ kind: 'mix', id: 'token-mix', title: 'Token mix' });
   return specs;
+}
+
+function rankedPanelHeight(count: number): number {
+  return Math.max(70, count * RANK_ROW_HEIGHT + 20);
 }
 
 export function titleOf(options: ChartOptions): string {
@@ -258,6 +319,69 @@ function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[
         };
       })
   );
+}
+
+/**
+ * Every model, ranked by total cost or tokens across the whole window,
+ * regardless of `options.series` — `modelBreakdowns` is unconditional on every
+ * row, so this reads directly off it rather than requiring `--split model`.
+ *
+ * Colour comes from the *agent* that ran the model (`vendorOf` applied to the
+ * agent name, not the model name) — never the literal provider id `ccusage`,
+ * which names the local-usage tool, not a billable endpoint; a remote
+ * platform's own id (`openrouter`, `openai`, `anthropic`) already doubles as
+ * its agent name. A model run under more than one agent has no single colour
+ * to wear honestly, so it gets the neutral mark instead of picking one
+ * arbitrarily; `captionLines` discloses which models that happened to.
+ */
+function buildModelRanking(rows: readonly ReportRow[], measure: Measure): RankedModel[] {
+  const found = new Map<string, { value: number; agents: Set<string> }>();
+
+  for (const row of rows) {
+    for (const model of row.modelBreakdowns) {
+      const value = valueOfModel(model, measure);
+      const entry = found.get(model.modelName) ?? { value: 0, agents: new Set<string>() };
+      entry.value += value;
+      for (const agent of model.agents) entry.agents.add(agent);
+      found.set(model.modelName, entry);
+    }
+  }
+
+  const ranked: RankedModel[] = [...found.entries()]
+    .map(([label, entry]) => {
+      const agents = [...entry.agents].sort();
+      const mixedAgent = agents.length > 1;
+      return {
+        label,
+        vendor: mixedAgent ? ('other' as VendorId) : vendorOf(agents[0] ?? ''),
+        value: entry.value,
+        agents,
+        mixedAgent,
+        isOther: false,
+      };
+    })
+    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+
+  if (ranked.length <= RANK_CAPACITY) return ranked;
+
+  const kept = ranked.slice(0, RANK_CAPACITY);
+  const tail = ranked.slice(RANK_CAPACITY);
+  kept.push({
+    label: `Other ${tail.length} models`,
+    vendor: 'other',
+    value: tail.reduce((sum, one) => sum + one.value, 0),
+    agents: [...new Set(tail.flatMap((one) => one.agents))].sort(),
+    mixedAgent: false,
+    isOther: true,
+    tailCount: tail.length,
+  });
+  return kept;
+}
+
+function valueOfModel(model: ModelBreakdown, measure: Measure): number {
+  return measure === 'cost'
+    ? (model.cost ?? 0)
+    : model.inputTokens + model.outputTokens + model.cacheCreationTokens + model.cacheReadTokens;
 }
 
 /**
@@ -350,13 +474,17 @@ function panelGroup(
       ? mixPanel(rows, box, right)
       : spec.kind === 'stacked'
         ? stackedPanel(rows, series, box, right, spec.measure)
-        : cumulativePanel(series, box, right, spec.measure);
+        : spec.kind === 'ranked'
+          ? rankedPanel(spec.models, box, right, spec.measure)
+          : cumulativePanel(series, box, right, spec.measure);
 
   return [
     `<g data-panel="${spec.id}">`,
     ...panelTitle(spec, box),
     ...body,
-    ...axisDates(rows, box.bottom, right),
+    // The ranked panel's rows are models, not periods — a date axis under it
+    // would claim an ordering along time that isn't there.
+    ...(spec.kind === 'ranked' ? [] : axisDates(rows, box.bottom, right)),
     `</g>`,
   ];
 }
@@ -365,17 +493,37 @@ function panelTitle(spec: PanelSpec, box: Box): string[] {
   const parts = [
     text(LEFT, box.top - 14, spec.title, { size: 11.5, fill: TOKEN.muted, letterSpacing: 0.3 }),
   ];
-  if (spec.kind !== 'mix') return parts;
 
   // The mix panel's series are the token classes, so its key sits with it rather
   // than in the figure legend.
-  let x = LEFT + 90;
-  for (const klass of TOKEN_CLASSES) {
-    parts.push(
-      `<rect x="${x}" y="${box.top - 22}" width="8" height="8" fill="${klass.colour}"/>`,
-      text(x + 13, box.top - 14, klass.label, { size: 10.5, fill: TOKEN.muted }),
-    );
-    x += 26 + labelWidth(klass.label);
+  if (spec.kind === 'mix') {
+    let x = LEFT + 90;
+    for (const klass of TOKEN_CLASSES) {
+      parts.push(
+        `<rect x="${x}" y="${box.top - 22}" width="8" height="8" fill="${klass.colour}"/>`,
+        text(x + 13, box.top - 14, klass.label, { size: 10.5, fill: TOKEN.muted }),
+      );
+      x += 26 + labelWidth(klass.label);
+    }
+    return parts;
+  }
+
+  // The ranked panel's colour means "agent", not "model" — a different
+  // mapping from whatever the figure's own legend is keying on (which follows
+  // `options.series` and could be model, API key, or anything else) — so it
+  // carries its own small key rather than relying on the legend above it.
+  if (spec.kind === 'ranked') {
+    const agents = [...new Set(spec.models.flatMap((model) => model.agents))].sort();
+    let x = LEFT + 150;
+    for (const agent of agents) {
+      const vendor = vendorOf(agent);
+      const colour = vendorColour(vendor);
+      parts.push(
+        vendorMark(vendor, x, box.top - 22, 10, colour),
+        text(x + 14, box.top - 14, agent, { size: 10.5, fill: TOKEN.muted }),
+      );
+      x += 22 + labelWidth(agent);
+    }
   }
   return parts;
 }
@@ -560,6 +708,58 @@ function spread(positions: readonly number[], gap: number, limit: number): numbe
 }
 
 /**
+ * One dot per model, ranked by total cost or tokens across the whole window —
+ * position along a shared scale, not area or a colour ramp, for the same
+ * accuracy reason `cumulativePanel` uses lines over a stacked comparison.
+ * Direct labels again, so no reader needs a 9-entry legend to identify a row.
+ */
+function rankedPanel(
+  models: readonly RankedModel[],
+  box: Box,
+  right: number,
+  measure: Measure,
+): string[] {
+  const axisLeft = LEFT + RANK_LEFT_MARGIN;
+  const max = Math.max(0, ...models.map((model) => model.value));
+  const top = axisMax(max);
+  const step = niceStep(max);
+  const format = formatFor(measure);
+  const x = (value: number) => axisLeft + (value / (top > 0 ? top : 1)) * (right - axisLeft);
+
+  const parts: string[] = [];
+  for (let value = 0; value <= top + step / 2; value += step) {
+    const at = round(x(value));
+    parts.push(
+      `<line x1="${at}" y1="${box.top - 4}" x2="${at}" y2="${box.bottom}" stroke="${TOKEN.grid}" stroke-width="1"/>`,
+      text(at, box.bottom + 16, format(value), { size: 10.5, fill: TOKEN.muted, anchor: 'middle' }),
+    );
+  }
+
+  models.forEach((model, index) => {
+    const y = box.top + index * RANK_ROW_HEIGHT + RANK_ROW_HEIGHT / 2;
+    const colour = model.vendor === 'other' ? TOKEN.subtle : vendorColour(model.vendor);
+    // A superscript dagger, not a second line, so a mixed-agent model still
+    // fits in one row height — the caption spells out what it means.
+    const label =
+      truncate(model.label, model.mixedAgent ? 27 : 30) + (model.mixedAgent ? ' †' : '');
+
+    parts.push(
+      vendorMark(model.vendor, axisLeft - 26, y - 6, 12, colour),
+      text(axisLeft - 36, y + 4, label, { size: 11.5, fill: TOKEN.body, anchor: 'end' }),
+    );
+    if (model.value > 0) {
+      const at = round(x(model.value));
+      parts.push(
+        `<circle cx="${at}" cy="${round(y)}" r="3.5" fill="${colour}"/>`,
+        text(at + 10, y + 4, format(model.value), { size: 11, fill: TOKEN.subtle }),
+      );
+    }
+  });
+
+  return parts;
+}
+
+/**
  * Share of each period's tokens by class. Normalised on purpose: the absolute
  * counts are in the panel above, and what this panel is for — a change in how
  * much of the workload is cache reads — is invisible at absolute scale.
@@ -638,6 +838,7 @@ export function captionLines(
   report: PeriodReport,
   options: ChartOptions,
   series: readonly Series[],
+  rankedModels: readonly RankedModel[] = [],
 ): string[] {
   const lines: string[] = [];
   const noun = SERIES_NOUN[options.series];
@@ -679,6 +880,23 @@ export function captionLines(
   }
   if (report.meta.priceSources.length > 0) {
     lines.push(`Unit prices: ${report.meta.priceSources.join(', ')}.`);
+  }
+
+  const tail = rankedModels.find((model) => model.isOther);
+  if (tail?.tailCount) {
+    lines.push(
+      `The models panel groups the ${tail.tailCount} lowest-total models as "${tail.label}" rather than omitting them; each one's own figure is in modelBreakdowns.`,
+    );
+  }
+  const mixedAgent = rankedModels.filter((model) => model.mixedAgent);
+  if (mixedAgent.length > 0) {
+    lines.push(
+      `${mixedAgent.map((model) => model.label).join(', ')} ${mixedAgent.length === 1 ? 'was' : 'were'} run under more than one agent in this window (${[
+        ...new Set(mixedAgent.flatMap((model) => model.agents)),
+      ].join(
+        ', ',
+      )}); the models panel marks ${mixedAgent.length === 1 ? 'it' : 'them'} with the neutral ring rather than either agent's colour.`,
+    );
   }
 
   const warnings = report.meta.notices.filter((notice) => notice.level !== 'info');

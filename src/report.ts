@@ -46,6 +46,10 @@ export type ModelBreakdown = {
   cost?: number;
   costSource?: CostSource | 'mixed';
   provider: string;
+  /** aiusage addition: the agent(s) behind this model (ccusage-compatible
+   * `agent` names for local rows, the provider id for platform rows) — never
+   * the literal provider id `ccusage`, which names the tool, not an agent. */
+  agents: string[];
   requests: number | null;
 };
 
@@ -248,6 +252,7 @@ function toModelBreakdown(bucket: Bucket, includeCost: boolean): ModelBreakdown 
     cacheCreationTokens: bucket.tokens.cacheCreation,
     cacheReadTokens: bucket.tokens.cacheRead,
     provider: bucket.providers.join(','),
+    agents: bucket.agents,
     requests: bucket.requests,
   };
   if (includeCost) {

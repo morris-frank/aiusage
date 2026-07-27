@@ -12,6 +12,7 @@
  * plus `providers` (capability matrix) and `pricing` (unit prices with source).
  */
 
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   aggregateByDimension,
@@ -79,21 +80,27 @@ USAGE
   aiusage agents [options]           usage grouped by agent (with --local)
   aiusage providers                  what each configured source can answer
   aiusage pricing [--model <id>]     unit prices, with their source
-  aiusage report [--out <file>]      two-panel figure (SVG, or --format html)
+  aiusage report [--out <file>]      the report figure (SVG, or --format html);
+                                      90-day default window, --local implied,
+                                      saved as HTML to ~/Downloads unless
+                                      --print or --out says otherwise
 
 OPTIONS
   -j, --json                 machine-readable output (ccusage-compatible shape)
   -s, --since <date>         start of the window (YYYY-MM-DD or YYYYMMDD)
   -u, --until <date>         end of the window, inclusive
-      --days <n>             window as "the last n days" (default: 30)
+      --days <n>             window as "the last n days" (default: 30, 90 for report)
   -z, --timezone <tz>        IANA timezone for grouping (default: UTC)
   -p, --provider <list>      restrict to providers: ${PROVIDER_IDS.join(',')}
       --split <list>         breakdowns to include: ${SPLIT_DIMENSIONS.join(',')} (default: model)
   -b, --breakdown            show per-model rows under each period in the table
       --local                also run ccusage and fuse local agent usage in
+                              (default for report; --no-local opts out)
   -O, --offline              price from the cached tables only; never fetch
       --out <file>           write the figure to a file instead of stdout
-      --format <svg|html>    figure format for the report command (default: svg)
+      --format <svg|html>    figure format for the report command (default: svg,
+                              or html when --local saves to ~/Downloads)
+      --print                print the report figure to stdout even with --local
       --granularity <g>      report grain: daily|weekly|monthly (default: daily)
       --no-cost              omit cost entirely (tokens only)
       --compact              drop secondary columns for narrow terminals
@@ -129,7 +136,12 @@ type ParsedOptions = {
   /** Fuse local agent usage (ccusage) into the report. */
   local: boolean;
   out: string | null;
-  format: 'svg' | 'html';
+  /** Null when `--format` was not given, so the report command can pick its
+   * own default instead of always falling back to svg. */
+  format: 'svg' | 'html' | null;
+  /** Force the report figure to stdout even when `--local` would otherwise
+   * default to a file — the escape hatch back to the old behaviour. */
+  print: boolean;
   /** Only `report` sets this; other commands take their grain from the command. */
   granularity: Granularity | null;
 };
@@ -141,6 +153,8 @@ export type CliEnvironment = {
   stderr: (text: string) => void;
   now: Date;
   isTty: boolean;
+  /** The user's home directory, for `report --local`'s default ~/Downloads path. */
+  homeDir: string;
   /** Injected so `cli.ts` stays free of side effects and stays testable. */
   writeFile?: (path: string, content: string) => void;
   /** Injected process runner for the local source; tests spawn nothing. */
@@ -319,6 +333,12 @@ function emit(
 /**
  * The figure. `--json` still emits the report the figure was drawn from, so the
  * numbers behind a picture are always obtainable from the same invocation.
+ *
+ * `report --local` defaults to a file in `~/Downloads` rather than stdout: a
+ * one-off local run is usually a person looking at their own machine, not a
+ * script consuming the output, and raw SVG dumped to a terminal is not
+ * something anyone reads there. `--print` (or an explicit `--out`) opts back
+ * out, and a plain `report` (no `--local`) is unaffected.
  */
 function emitFigure(
   environment: CliEnvironment,
@@ -329,13 +349,16 @@ function emitFigure(
     series: seriesDimension(options.splits),
     includeCost: options.includeCost,
   };
+  const autoSave = options.local && !options.json && !options.out && !options.print;
+  const format = options.format ?? (autoSave ? 'html' : 'svg');
   const content = options.json
     ? JSON.stringify(report, null, 2)
-    : options.format === 'html'
+    : format === 'html'
       ? renderReportHtml(report, chartOptions)
       : renderReportSvg(report, chartOptions);
+  const out = options.out ?? (autoSave ? defaultReportPath(environment, options, format) : null);
 
-  if (!options.out) {
+  if (!out) {
     environment.stdout(content);
     return;
   }
@@ -343,13 +366,32 @@ function emitFigure(
     environment.stderr('This build cannot write files; drop --out and redirect stdout instead.');
     return;
   }
-  environment.writeFile(options.out, content);
-  environment.stderr(`Wrote ${options.out}`);
+  environment.writeFile(out, content);
+  environment.stderr(`Wrote ${out}`);
 }
 
-/** Series come from the first non-model split; provider is the safe default. */
+function defaultReportPath(
+  environment: CliEnvironment,
+  options: ParsedOptions,
+  format: 'svg' | 'html',
+): string {
+  return join(
+    environment.homeDir,
+    'Downloads',
+    `aiusage-report-${options.range.since}-to-${options.range.until}.${format}`,
+  );
+}
+
+/**
+ * Series come from the first non-model split; agent is the safe default, not
+ * provider — every remote platform record's agent already falls back to its
+ * provider id (`agentOf`), so this changes nothing for them, but it keeps
+ * ccusage's local rows split by the actual agent (`claude`, `codex`) instead
+ * of lumped under the literal string `ccusage`, which names the tool that
+ * fetched the rows, not a billable endpoint.
+ */
 function seriesDimension(splits: readonly SplitDimension[]): SplitDimension {
-  return splits.find((split) => split !== 'model') ?? 'provider';
+  return splits.find((split) => split !== 'model') ?? 'agent';
 }
 
 function emitPricing(
@@ -477,9 +519,11 @@ const CLI_OPTIONS = {
   split: { type: 'string', multiple: true },
   breakdown: { type: 'boolean', short: 'b', default: false },
   local: { type: 'boolean', default: false },
+  'no-local': { type: 'boolean', default: false },
   offline: { type: 'boolean', short: 'O', default: false },
   out: { type: 'string' },
   format: { type: 'string' },
+  print: { type: 'boolean', default: false },
   granularity: { type: 'string' },
   'no-cost': { type: 'boolean', default: false },
   compact: { type: 'boolean', default: false },
@@ -514,7 +558,7 @@ export function parseCli(environment: CliEnvironment): ParsedOptions | null {
   return {
     command,
     json: values.json === true,
-    range: parseRange(values, environment.now),
+    range: parseRange(values, environment.now, command),
     timeZone: parseTimeZone(values.timezone),
     providers: parseProviders(values.provider),
     splits: parseSplits(values.split, command),
@@ -524,9 +568,12 @@ export function parseCli(environment: CliEnvironment): ParsedOptions | null {
     compact: values.compact === true,
     color: values['no-color'] === true ? false : values.color === true || colorAuto(environment),
     models: values.model ?? [],
-    local: values.local === true,
+    // report fuses local usage by default — it is usually a person looking at
+    // their own machine's whole picture; --no-local opts back out.
+    local: values['no-local'] === true ? false : values.local === true || command === 'report',
     out: values.out ?? null,
     format: parseFormat(values.format),
+    print: values.print === true,
     granularity: parseGranularity(values.granularity, command),
   };
 }
@@ -542,9 +589,20 @@ function parseCommand(positionals: readonly string[]): Command {
   return found;
 }
 
+/**
+ * `report`'s default window is wider than every other command's: it draws a
+ * time series, and 30 days of daily bars is a thin picture to read a trend
+ * from. Every other command keeps the 30-day default, which is also
+ * OpenRouter's hard lookback limit.
+ */
+function defaultDays(command: Command): number {
+  return command === 'report' ? 90 : 30;
+}
+
 function parseRange(
   values: { since?: string | undefined; until?: string | undefined; days?: string | undefined },
   now: Date,
+  command: Command,
 ): DateRange {
   if (values.days !== undefined && (values.since !== undefined || values.until !== undefined)) {
     throw new UsageError('--days cannot be combined with --since/--until.');
@@ -557,7 +615,7 @@ function parseRange(
     return defaultRange(now, days);
   }
 
-  const fallback = defaultRange(now);
+  const fallback = defaultRange(now, defaultDays(command));
   const since = values.since === undefined ? fallback.since : parseDateInput(values.since, 'since');
   const until = values.until === undefined ? fallback.until : parseDateInput(values.until, 'until');
   if (since > until) throw new UsageError(`--since (${since}) is after --until (${until}).`);
@@ -587,8 +645,9 @@ function parseProviders(provider: string[] | undefined): ProviderId[] {
   return resolved.length > 0 ? resolved : [...PROVIDER_IDS];
 }
 
-function parseFormat(format: string | undefined): 'svg' | 'html' {
-  if (format === undefined) return 'svg';
+/** Null means "not given" — `report` picks its own default from there. */
+function parseFormat(format: string | undefined): 'svg' | 'html' | null {
+  if (format === undefined) return null;
   if (format !== 'svg' && format !== 'html') {
     throw new UsageError(`Unknown --format "${format}". Expected svg or html.`);
   }
@@ -597,9 +656,10 @@ function parseFormat(format: string | undefined): 'svg' | 'html' {
 
 function parseSplits(split: string[] | undefined, command: Command): SplitDimension[] {
   if (!split || split.length === 0) {
-    // Model breakdowns are the ccusage-compatible default; the figure also needs
-    // a series dimension, and provider is the one every source can answer.
-    if (command === 'report') return ['model', 'provider'];
+    // Model breakdowns are the ccusage-compatible default; the figure also
+    // needs a series dimension, and agent is the one every source can answer
+    // without lumping ccusage's local agents under the literal id `ccusage`.
+    if (command === 'report') return ['model', 'agent'];
     return command === 'daily' || command === 'weekly' || command === 'monthly' ? ['model'] : [];
   }
   const requested = split.flatMap((value) => value.split(',')).map((value) => value.trim());
@@ -613,6 +673,13 @@ function parseSplits(split: string[] | undefined, command: Command): SplitDimens
       );
     }
     if (!resolved.includes(found)) resolved.push(found);
+  }
+  // The figure never stacks by model (too many categories for a legend; see
+  // the "top models" panel instead) — it falls back to agent. An explicit
+  // `--split model` with nothing else would leave that fallback with no
+  // agent breakdown to draw, and silently render an empty figure.
+  if (command === 'report' && !resolved.some((dimension) => dimension !== 'model')) {
+    if (!resolved.includes('agent')) resolved.push('agent');
   }
   return resolved;
 }

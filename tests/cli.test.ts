@@ -25,6 +25,7 @@ async function environment(
     stderr: (text) => err.push(text),
     now: new Date('2026-07-26T12:00:00Z'),
     isTty: false,
+    homeDir: '/home/tester',
     writeFile: (path, content) => written.push({ path, content }),
     ...overrides,
   };
@@ -224,6 +225,31 @@ describe('window selection', () => {
       until: '2026-07-15',
     });
   });
+
+  it('defaults report to a 90-day window, not the usual 30', async () => {
+    const { cli, out } = await environment(['report', '--json', '--no-local', ...offline]);
+    await run(cli);
+    expect(JSON.parse(out.join('\n')).meta.range).toEqual({
+      since: '2026-04-28',
+      until: '2026-07-26',
+    });
+  });
+
+  it('still honours an explicit --days for report, over the 90-day default', async () => {
+    const { cli, out } = await environment([
+      'report',
+      '--json',
+      '--no-local',
+      '--days',
+      '7',
+      ...offline,
+    ]);
+    await run(cli);
+    expect(JSON.parse(out.join('\n')).meta.range).toEqual({
+      since: '2026-07-20',
+      until: '2026-07-26',
+    });
+  });
 });
 
 describe('commands', () => {
@@ -396,9 +422,43 @@ describe('the local source and the figure', () => {
     expect(written[0]?.content).toContain('claude');
   });
 
-  it('emits the figure on stdout, as HTML when asked', async () => {
+  it('does not render an empty figure when --split model is the only split requested', async () => {
+    // The figure never stacks by model (see chart/figure.ts) and falls back to
+    // agent — which only has data to draw if 'agent' actually made it into
+    // the requested splits. An explicit `--split model` alone used to leave
+    // that fallback empty.
     const { cli, out } = await environment(
-      ['report', '--local', '--format', 'html', ...offline],
+      ['report', '--local', '--split', 'model', '--print', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    const svg = out.join('\n');
+    expect(svg).toContain('<rect');
+    expect(svg.match(/<rect/g)?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('defaults the report figure to agent, never the literal ccusage id as a data label', async () => {
+    const { cli, out } = await environment(
+      ['report', '--local', '--print', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    const svg = out.join('\n');
+    expect(svg).toContain('LLM spend by agent');
+    expect(svg).toContain('claude');
+    expect(svg).toContain('codex');
+    // "ccusage" still legitimately names the tool in the caption's provenance
+    // prose ("...restated from ccusage's own calculation..."); it must not
+    // appear as its own legend/chart data label (an isolated text node).
+    expect(svg).not.toMatch(/>ccusage</);
+  });
+
+  it('emits the figure on stdout, as HTML when asked', async () => {
+    // --print is the escape hatch: without it, --local defaults to a file.
+    const { cli, out } = await environment(
+      ['report', '--local', '--format', 'html', '--print', ...offline],
       {},
       { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
     );
@@ -406,7 +466,86 @@ describe('the local source and the figure', () => {
     expect(out.join('\n').startsWith('<!doctype html>')).toBe(true);
   });
 
-  it('still emits the numbers behind the figure with --json', async () => {
+  it('emits the figure on stdout by default when --no-local opts out of local fusion', async () => {
+    const { cli, out } = await environment([
+      'report',
+      '--format',
+      'html',
+      '--no-local',
+      ...offline,
+    ]);
+    expect(await run(cli)).toBe(0);
+    expect(out.join('\n').startsWith('<!doctype html>')).toBe(true);
+  });
+
+  it('implies --local for report, with a 90-day default window', async () => {
+    const { cli, out, err, written } = await environment(
+      ['report', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(out).toHaveLength(0);
+    expect(written).toHaveLength(1);
+    expect(written[0]?.path).toBe(
+      '/home/tester/Downloads/aiusage-report-2026-04-28-to-2026-07-26.html',
+    );
+    expect(written[0]?.content.startsWith('<!doctype html>')).toBe(true);
+    expect(err.join('\n')).toContain('Wrote /home/tester/Downloads/');
+  });
+
+  it('--no-local drops local fusion for report even though it is the default', async () => {
+    const { cli, out } = await environment(['report', '--no-local', '--print', ...offline]);
+    expect(await run(cli)).toBe(0);
+    // No runCommand injected: if --no-local did not work, this would try to
+    // spawn a real ccusage process and fail the run.
+    expect(out.join('\n').startsWith('<svg')).toBe(true);
+  });
+
+  it('honours an explicit --format svg for the --local default file', async () => {
+    const { cli, written } = await environment(
+      ['report', '--local', '--format', 'svg', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(written[0]?.path.endsWith('.svg')).toBe(true);
+    expect(written[0]?.content.startsWith('<svg')).toBe(true);
+  });
+
+  it('--print overrides the --local default and goes back to stdout', async () => {
+    const { cli, out, written } = await environment(
+      ['report', '--local', '--print', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(written).toHaveLength(0);
+    expect(out.join('\n').startsWith('<svg')).toBe(true);
+  });
+
+  it('an explicit --out still wins over the --local default', async () => {
+    const { cli, written } = await environment(
+      ['report', '--local', '--out', 'figure.svg', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(written[0]?.path).toBe('figure.svg');
+  });
+
+  it('--json with --local still goes to stdout, not the ~/Downloads default', async () => {
+    const { cli, out, written } = await environment(
+      ['report', '--local', '--json', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(written).toHaveLength(0);
+    expect(() => JSON.parse(out.join('\n'))).not.toThrow();
+  });
+
+  it('still emits the numbers behind the figure with --json, split by agent not the literal ccusage id', async () => {
     const { cli, out } = await environment(
       ['report', '--local', '--json', ...offline],
       {},
@@ -414,7 +553,10 @@ describe('the local source and the figure', () => {
     );
     expect(await run(cli)).toBe(0);
     const report = JSON.parse(out.join('\n'));
-    expect(report.daily[0].providerBreakdowns[0].id).toBe('ccusage');
+    expect(report.daily[0].agentBreakdowns.map((row: { id: string }) => row.id)).toEqual([
+      'claude',
+      'codex',
+    ]);
   });
 
   it('takes a report grain from --granularity, and nowhere else', async () => {

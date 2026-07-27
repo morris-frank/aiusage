@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
-import type { DimensionBreakdown, PeriodReport, ReportRow } from '../src/report.js';
+import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../src/report.js';
 
 function breakdown(name: string, cost: number, tokens = 1000): DimensionBreakdown {
   return {
@@ -20,7 +20,32 @@ function breakdown(name: string, cost: number, tokens = 1000): DimensionBreakdow
   };
 }
 
-function row(period: string, costs: Record<string, number>): ReportRow {
+function modelBreakdown(
+  modelName: string,
+  provider: string,
+  cost: number,
+  tokens = 1000,
+  agents: string[] = [provider],
+): ModelBreakdown {
+  return {
+    modelName,
+    inputTokens: tokens,
+    outputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    cost,
+    costSource: 'reported',
+    provider,
+    agents,
+    requests: null,
+  };
+}
+
+function row(
+  period: string,
+  costs: Record<string, number>,
+  models: ModelBreakdown[] = [],
+): ReportRow {
   const total = Object.values(costs).reduce((sum, one) => sum + one, 0);
   return {
     agent: 'all',
@@ -34,7 +59,7 @@ function row(period: string, costs: Record<string, number>): ReportRow {
       requests: null,
       reasoningTokens: 0,
     },
-    modelBreakdowns: [],
+    modelBreakdowns: models,
     modelsUsed: ['some-model'],
     outputTokens: 0,
     period,
@@ -268,5 +293,60 @@ describe('report figure', () => {
     expect(html).toContain('class="badge unsupported"');
     expect(html).toContain('no splits');
     expect(html).toContain('unknown, not zero');
+  });
+
+  it('ranks models by cost, coloured by provider rather than by model', () => {
+    const svg = renderReportSvg(
+      report([
+        row('2026-07-25', { openrouter: 3, openai: 1 }, [
+          modelBreakdown('minimax/minimax-m3', 'openrouter', 2),
+          modelBreakdown('gpt-4o-mini-2024-07-18', 'openai', 1),
+        ]),
+      ]),
+      OPTIONS,
+    );
+
+    // The vendor marks' own nested <g> groups make the naive `panel()` helper
+    // stop early, so assert against the full document instead.
+    expect(svg).toContain('data-panel="model-rank"');
+    expect(svg).toContain('minimax/minimax-m3');
+    expect(svg).toContain('gpt-4o-mini-2024-07-18');
+  });
+
+  it('does not draw a ranking panel for zero or one model — there is nothing to rank', () => {
+    const svg = renderReportSvg(
+      report([
+        row('2026-07-25', { openrouter: 1 }, [modelBreakdown('solo-model', 'openrouter', 1)]),
+      ]),
+      OPTIONS,
+    );
+    expect(svg).not.toContain('data-panel="model-rank"');
+  });
+
+  it('folds the tail beyond the top models into a disclosed "Other" row, never a silent cut', () => {
+    const models = Array.from({ length: 10 }, (_unused, index) =>
+      modelBreakdown(`model-${index}`, 'openrouter', 10 - index),
+    );
+    const svg = renderReportSvg(report([row('2026-07-25', { openrouter: 55 }, models)]), OPTIONS);
+
+    expect(svg).toContain('Other 2 models');
+    expect(svg).toContain('groups the 2 lowest-total models as &quot;Other 2 models&quot;');
+  });
+
+  it('marks a model run under more than one agent with the neutral ring, not either colour', () => {
+    const svg = renderReportSvg(
+      report([
+        row('2026-07-25', { openrouter: 2, anthropic: 1 }, [
+          modelBreakdown('anthropic/claude-haiku-4.5', 'openrouter', 2),
+          modelBreakdown('anthropic/claude-haiku-4.5', 'anthropic', 1),
+          modelBreakdown('gpt-4o-mini-2024-07-18', 'openai', 1),
+        ]),
+      ]),
+      OPTIONS,
+    );
+
+    expect(svg).toContain('anthropic/claude-haiku-4.5 †');
+    expect(svg).toContain('run under more than one agent');
+    expect(svg).toContain('anthropic/claude-haiku-4.5 was run');
   });
 });

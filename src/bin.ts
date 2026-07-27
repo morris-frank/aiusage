@@ -5,6 +5,7 @@
  */
 
 import { writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { run } from './cli.js';
 
 run({
@@ -14,6 +15,7 @@ run({
   stderr: (text) => process.stderr.write(`${text}\n`),
   now: new Date(),
   isTty: process.stdout.isTTY === true,
+  homeDir: homedir(),
   writeFile: (path, content) => writeFileSync(path, content, 'utf8'),
 })
   .then((code) => {
