@@ -81,6 +81,11 @@ export function allocateProportionally(totalMicros: number, weights: number[]): 
 export function formatUsd(micros: number | null): string {
   if (micros === null) return '—';
   const usd = microsToUsd(micros);
-  if (usd !== 0 && Math.abs(usd) < 0.01) return `$${usd.toFixed(6)}`;
+  if (usd !== 0 && Math.abs(usd) < 0.01) {
+    // Drop trailing zeros after 3 decimals, but keep at least 3 if needed,
+    // or just use 3 decimals if user asked for $0.006.
+    const rounded = Number(usd.toFixed(3));
+    return rounded === 0 ? '< $0.001' : `$${rounded.toFixed(3)}`;
+  }
   return `$${usd.toFixed(2)}`;
 }

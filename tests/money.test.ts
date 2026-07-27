@@ -67,7 +67,7 @@ describe('allocateProportionally', () => {
 
 describe('formatUsd', () => {
   it('keeps sub-cent amounts visible instead of rounding them to $0.00', () => {
-    expect(formatUsd(4200)).toBe('$0.004200');
+    expect(formatUsd(4200)).toBe('$0.004');
     expect(formatUsd(12_340_000)).toBe('$12.34');
     expect(formatUsd(0)).toBe('$0.00');
     expect(formatUsd(null)).toBe('—');
