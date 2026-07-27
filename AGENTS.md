@@ -47,10 +47,13 @@ The rules below exist to make that impossible to do quietly.
     management keys. Deduplicate on evidence (a key hash, a masked label); where no
     evidence exists, warn (`local-overlap-possible`) rather than quietly adding or
     dropping.
-12. **The figure carries its own provenance.** `chart.ts` output travels without the table,
+12. **The figure carries its own provenance.** `chart/` output travels without the table,
     so its caption states the window, the cost provenance, the price sources and every
     source that did not fully report. Soilytix visual language: white report surface, flat,
-    hairline rules, Inter, mint as the one highlight.
+    hairline rules, Inter, Lime ink for the title and key rule, Mint as the one highlight,
+    the sequential ramp for ordered token classes, categorical accents for series. Vendor
+    marks are original glyphs, never a vendor's logo, and a name that does not identify a
+    vendor gets the neutral mark rather than a guess.
 
 ## Layout
 
@@ -67,7 +70,8 @@ src/
   aggregate.ts      grouping by period and by dimension (incl. agent)
   report.ts         the JSON contract (ccusage-shaped + additive meta)
   render.ts         terminal tables, capability matrix, notices
-  chart.ts          the report figure: self-contained SVG, printable HTML wrapper
+  chart/            the report: tokens.ts (visual vocabulary + vendor marks),
+                    figure.ts (the SVG panels), page.ts (printable HTML)
   cli.ts            argument parsing and command dispatch (pure; returns an exit code)
   bin.ts            the executable: process wiring only
   pricing/          price books: platform catalogues, LiteLLM table, disk cache

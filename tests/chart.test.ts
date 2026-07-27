@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderReportHtml, renderReportSvg } from '../src/chart.js';
+import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
 import type { DimensionBreakdown, PeriodReport, ReportRow } from '../src/report.js';
 
 function breakdown(name: string, cost: number, tokens = 1000): DimensionBreakdown {
@@ -76,6 +76,15 @@ function report(rows: ReportRow[], overrides: Partial<PeriodReport['meta']> = {}
 
 const OPTIONS = { series: 'provider' as const, includeCost: true };
 
+/** Cache-read: the lightest stop of the sequential ramp the mix panel uses. */
+const TOKEN_CLASS_COLOUR = '#CFE3A3';
+
+/** A panel's own markup, so an assertion cannot accidentally match another panel. */
+function panel(svg: string, id: string): string {
+  const found = new RegExp(`<g data-panel="${id}">([\\s\\S]*?)</g>`).exec(svg);
+  return found?.[1] ?? '';
+}
+
 describe('report figure', () => {
   it('draws one stacked segment per series per period, plus a cumulative line each', () => {
     const svg = renderReportSvg(
@@ -87,12 +96,57 @@ describe('report figure', () => {
     );
 
     expect(svg.startsWith('<svg')).toBe(true);
-    // 2 periods × 2 series, and the two panel baselines are lines, not rects.
-    expect(svg.match(/<rect/g)?.length).toBe(1 + 4);
-    expect(svg.match(/<path/g)?.length).toBe(2);
+    // 2 periods × 2 series in the stacked cost panel.
+    expect(panel(svg, 'cost-daily').match(/<rect/g)?.length).toBe(4);
+    // One line per series; the vendor marks in the end labels are paths too, so
+    // the line width is what distinguishes them.
+    expect(panel(svg, 'cost-cumulative').match(/stroke-width="1.6"/g)?.length).toBe(2);
     // Direct end labels are the secondary encoding for the cumulative panel.
     expect(svg).toContain('anthropic  $7.00');
     expect(svg).toContain('openrouter  $3.00');
+  });
+
+  it('plots tokens alongside cost, and the token mix as shares', () => {
+    const svg = renderReportSvg(
+      report([
+        row('2026-07-24', { openrouter: 1, anthropic: 3 }),
+        row('2026-07-25', { openrouter: 2, anthropic: 4 }),
+      ]),
+      OPTIONS,
+    );
+
+    // Cost and tokens are different questions, so they get their own panels.
+    expect(svg).toContain('data-panel="tokens-daily"');
+    expect(svg).toContain('>Daily tokens<');
+    expect(panel(svg, 'tokens-daily').match(/<rect/g)?.length).toBe(4);
+
+    // The mix panel is normalised: absolute tokens are already above it.
+    const mix = panel(svg, 'token-mix');
+    expect(svg).toContain('>Token mix<');
+    expect(mix).toContain('>100%<');
+    expect(mix).toContain(TOKEN_CLASS_COLOUR);
+  });
+
+  it('drops the cost panels rather than faking them when cost was not collected', () => {
+    const svg = renderReportSvg(report([row('2026-07-25', { anthropic: 0 })]), {
+      series: 'provider',
+      includeCost: false,
+    });
+    expect(svg).not.toContain('data-panel="cost-daily"');
+    expect(svg).toContain('data-panel="tokens-daily"');
+    expect(svg).toContain('data-panel="tokens-cumulative"');
+    expect(svg).toContain('data-panel="token-mix"');
+  });
+
+  it('marks each series with a vendor glyph, and stays neutral when the name says nothing', () => {
+    const svg = renderReportSvg(
+      report([row('2026-07-25', { anthropic: 3, 'some-key-7f2': 1 })]),
+      OPTIONS,
+    );
+    // Anthropic's mark is an SVG path; an unidentifiable series gets the ring,
+    // rather than a mark that would claim a vendor the name does not name.
+    expect(svg).toMatch(/<path d="M/);
+    expect(svg).toMatch(/<circle cx="[\d.]+" cy="[\d.]+" r="[\d.]+" fill="none"/);
   });
 
   it('carries its own provenance so the figure cannot be over-read alone', () => {
@@ -137,13 +191,12 @@ describe('report figure', () => {
     expect(svg).toContain('litellm@2026-07-26');
   });
 
-  it('plots tokens and says so when cost was not collected', () => {
+  it('says in the caption when cost was not collected', () => {
     const svg = renderReportSvg(report([row('2026-07-25', { anthropic: 0 })]), {
       series: 'provider',
       includeCost: false,
     });
     expect(svg).toContain('LLM token usage by provider');
-    expect(svg).toContain('Daily tokens');
     expect(svg).toContain('--no-cost');
   });
 
@@ -166,7 +219,54 @@ describe('report figure', () => {
     expect(html).toContain('<svg');
     // Reports are white surfaces in this visual language; bone prints muddy.
     expect(html).toContain('background: #fff');
-    expect(html).toContain('<td style="text-align:left">2026-07-25</td>');
+    expect(html).toContain('class="left period">2026-07-25<');
     expect(html).toContain('some-model');
+  });
+
+  it('gives the table the shape of its numbers, and a provenance badge per row', () => {
+    const html = renderReportHtml(
+      report([row('2026-07-24', { anthropic: 1 }), row('2026-07-25', { anthropic: 3 })]),
+      OPTIONS,
+    );
+    // A cost bar proportional to the largest row, so the table reads at a glance.
+    expect(html).toContain('class="bar" style="width:100.0%"');
+    expect(html).toContain('class="bar" style="width:33.3%"');
+    // The four-segment token mix
+    expect(html).toContain('class="mix"');
+    // Vendor marks travel with the row, and models are chips rather than prose.
+    expect(html).toContain('class="marks"');
+    expect(html).toContain('class="chip">some-model<');
+  });
+
+  it('lists every source with what it actually answered', () => {
+    const html = renderReportHtml(
+      report([row('2026-07-25', { anthropic: 2 })], {
+        providers: [
+          {
+            id: 'together',
+            label: 'Together AI',
+            status: 'unsupported',
+            capabilities: {
+              usage: false,
+              reportedCost: false,
+              splitByModel: false,
+              splitByApiKey: false,
+              splitByAccount: false,
+              splitByWorkspace: false,
+              livePricing: true,
+              maxLookbackDays: null,
+            },
+            identity: null,
+            recordCount: 0,
+            costSource: 'unavailable',
+          },
+        ],
+      }),
+      OPTIONS,
+    );
+    expect(html).toContain('Together AI');
+    expect(html).toContain('class="badge unsupported"');
+    expect(html).toContain('no splits');
+    expect(html).toContain('unknown, not zero');
   });
 });

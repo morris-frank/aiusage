@@ -20,7 +20,7 @@ import {
   type SplitDimension,
   totalsOf,
 } from './aggregate.js';
-import { renderReportHtml, renderReportSvg } from './chart.js';
+import { renderReportHtml, renderReportSvg } from './chart/index.js';
 import { collectUsage, createHttpClient } from './collect.js';
 import { type ConfigError, loadConfig, type RuntimeConfig } from './config.js';
 import { applyCosts, type CostingResult } from './cost.js';

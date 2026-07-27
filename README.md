@@ -193,10 +193,23 @@ OpenRouter only reports whole UTC days and emits a `timezone-approximation` warn
 
 ## The report figure
 
-`aiusage report` draws the same numbers as a two-panel figure on one shared time axis:
-period cost stacked by series on top, the cumulative total per series below with each line
-labelled at its end. Output is a self-contained SVG (no fonts, no scripts, no network), or
-a printable white page with `--format html`.
+`aiusage report` draws the same numbers as stacked panels on one shared time axis:
+
+1. **cost per period**, stacked by series;
+2. **cumulative cost** per series, each line labelled at its end point;
+3. **tokens per period**, stacked by the same series — where the volume went is rarely the
+   same shape as where the money went;
+4. **token mix**, the share of each period that was uncached input, output, cache write and
+   cache read, so a change in caching shows up on its own axis.
+
+With `--no-cost` the two cost panels are dropped rather than faked, and the token panels
+take both the composition and the accumulation. Each series carries a vendor mark as well
+as a colour, so no series depends on hue alone; the marks are original glyphs, not vendor
+logos, and a name that does not identify a vendor gets a neutral one.
+
+Output is a self-contained SVG (no fonts, no scripts, no network), or a printable white page
+with `--format html` — which adds a summary strip, the period table with a cost bar and a
+token-mix bar per row, what every source actually answered, and every notice.
 
 ```bash
 aiusage report --days 30 --out spend.svg          # series = provider
