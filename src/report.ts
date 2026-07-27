@@ -24,6 +24,7 @@ import type { Bucket, PeriodBucket, SplitDimension } from './aggregate.js';
 import { totalTokens } from './aggregate.js';
 import type { Collection } from './collect.js';
 import type { CostedRecord, CostingResult, CostSource } from './cost.js';
+import { canonicalModelId } from './models.js';
 import { microsToUsd } from './money.js';
 import {
   type DateRange,
@@ -320,8 +321,43 @@ function buildMeta(
       description: entry.description,
       reason: entry.reason,
     })),
-    notices: [...collection.diagnostics, ...costing.diagnostics],
+    notices: [
+      ...collection.diagnostics,
+      ...costing.diagnostics,
+      ...modelCanonicalizationNotice(costing.records),
+    ],
   };
+}
+
+/**
+ * One notice, only when canonicalising model ids (see `models.ts`) actually
+ * merged two or more distinct raw spellings into one row — never silent, per
+ * the same discipline as every other provenance-affecting transform here.
+ */
+function modelCanonicalizationNotice(records: readonly CostedRecord[]): Diagnostic[] {
+  const rawByCanonical = new Map<string, Set<string>>();
+  for (const record of records) {
+    if (!record.model) continue;
+    const canonical = canonicalModelId(record.model);
+    const raw = rawByCanonical.get(canonical) ?? new Set<string>();
+    raw.add(record.model);
+    rawByCanonical.set(canonical, raw);
+  }
+  const merged = [...rawByCanonical.entries()].filter(([, raw]) => raw.size > 1);
+  if (merged.length === 0) return [];
+
+  const examples = merged
+    .slice(0, 3)
+    .map(([canonical, raw]) => `${canonical} (${[...raw].sort().join(', ')})`)
+    .join('; ');
+  return [
+    {
+      provider: null,
+      level: 'info',
+      code: 'model-id-canonicalized',
+      message: `${merged.length} model id(s) were merged by canonical identity — vendor prefix and pinned-snapshot date stripped, since platforms spell the same model differently: ${examples}${merged.length > 3 ? ', …' : ''}. A distinct dated snapshot you needed to tell apart will read as the same row.`,
+    },
+  ];
 }
 
 function summarizeProvider(

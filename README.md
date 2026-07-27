@@ -115,6 +115,17 @@ and otherwise from [LiteLLM's price table](https://github.com/BerriAI/litellm) �
 source `ccusage` prices Claude Code with. `meta.priceSources` records which was used;
 `aiusage pricing` shows the per-model prices and the key each was matched on.
 
+**Model identity across surfaces.** Platforms spell the same model differently — OpenRouter
+prefixes a vendor (`anthropic/claude-opus-5`), a platform's own API may carry a trailing
+pinned-snapshot date (`claude-opus-5-20260315`), and ccusage's local logs use neither. A
+`--split model` view (and the report figure's own model breakdowns) groups by the *canonical*
+id — vendor prefix and pinned-snapshot date stripped ([src/models.ts](src/models.ts)) — the
+same transform LiteLLM price matching already trusts, so "the same model" reads as one row
+rather than three. When this actually merges two or more distinct raw ids, a
+`model-id-canonicalized` notice says so, naming them; it never happens silently. `modelsUsed`
+still lists every raw spelling seen, unmerged, for anyone who needs the exact strings a
+platform reported.
+
 ## JSON contract
 
 `aiusage --json` mirrors `ccusage --json` field for field on the shared parts, so anything
@@ -279,6 +290,11 @@ See [AGENTS.md](AGENTS.md) for the working agreement.
 - **Unresolved:** Together's `/v1/models` price unit is undocumented and its catalogue
   needs a key, so it is read as USD per million tokens with implausible values dropped.
   Verify against an invoice before relying on Together prices.
+- Canonical model grouping (above) only strips a vendor prefix and a pinned-snapshot date —
+  it does not catch a platform's own internal version string that has no mechanical relation
+  to another surface's spelling. Two distinct dated snapshots of a model you wanted to tell
+  apart will read as the same row; `model-id-canonicalized` says when a merge happened, not
+  which snapshot won.
 
 ## Licence
 

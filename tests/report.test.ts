@@ -226,6 +226,73 @@ describe('aiusage additions', () => {
   });
 });
 
+describe('canonical model identity', () => {
+  function reportWith(records: ReturnType<typeof costedRecord>[]) {
+    const collection: Collection = { results: [], diagnostics: [] };
+    const costing: CostingResult = { records, unattributed: [], diagnostics: [] };
+    const options: ReportOptions = {
+      granularity: 'daily',
+      range: RANGE,
+      timeZone: 'UTC',
+      splits: ['model'],
+      includeCost: true,
+      generatedAt: new Date('2026-07-26T12:00:00Z'),
+      priceSources: [],
+    };
+    const periods = aggregateByPeriod(records, {
+      granularity: options.granularity,
+      timeZone: options.timeZone,
+      range: options.range,
+      splits: options.splits,
+    });
+    return buildPeriodReport(periods, totalsOf(periods), collection, costing, options);
+  }
+
+  it('merges an OpenRouter-prefixed id and a first-party id into one modelBreakdowns row', () => {
+    const report = reportWith([
+      costedRecord({
+        provider: 'openrouter',
+        bucketStart: '2026-07-10T00:00:00.000Z',
+        model: 'anthropic/claude-opus-5',
+        costMicros: 2_000_000,
+      }),
+      costedRecord({
+        provider: 'anthropic',
+        bucketStart: '2026-07-10T00:00:00.000Z',
+        model: 'claude-opus-5',
+        costMicros: 1_000_000,
+      }),
+    ]);
+    const [row] = report.daily ?? [];
+    expect(row?.modelBreakdowns).toHaveLength(1);
+    expect(row?.modelBreakdowns[0]?.modelName).toBe('claude-opus-5');
+    expect(row?.modelBreakdowns[0]?.cost).toBeCloseTo(3, 9);
+
+    expect(report.meta.notices.map((n) => n.code)).toContain('model-id-canonicalized');
+    const notice = report.meta.notices.find((n) => n.code === 'model-id-canonicalized');
+    expect(notice?.message).toContain('claude-opus-5');
+    expect(notice?.message).toContain('anthropic/claude-opus-5');
+  });
+
+  it('says nothing when no raw model id actually collides with another', () => {
+    const report = reportWith([
+      costedRecord({
+        provider: 'anthropic',
+        bucketStart: '2026-07-10T00:00:00.000Z',
+        model: 'claude-opus-5',
+        costMicros: 1_000_000,
+      }),
+      costedRecord({
+        provider: 'openai',
+        bucketStart: '2026-07-10T00:00:00.000Z',
+        model: 'gpt-5.6',
+        costMicros: 1_000_000,
+      }),
+    ]);
+    expect(report.meta.notices.map((n) => n.code)).not.toContain('model-id-canonicalized');
+  });
+});
+
 describe('--no-cost', () => {
   it('omits every cost field rather than emitting zeroes', () => {
     const report = periodReport(false);

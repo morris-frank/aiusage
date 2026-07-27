@@ -9,6 +9,7 @@
  * versioned, and is the same source `ccusage` prices Claude Code usage with.
  */
 
+import { stripDateSuffix, stripVendorPrefix } from '../models.js';
 import type { ProviderId } from '../types.js';
 import type { ModelPrice, PriceBook, PriceLookup } from './types.js';
 
@@ -44,8 +45,6 @@ const LITELLM_PROVIDER: Partial<Record<ProviderId, string>> = {
   openrouter: 'openrouter',
   together: 'together_ai',
 };
-
-const DATE_SUFFIX_RE = /-(\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 function numberOrNull(value: number | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -88,14 +87,14 @@ function toModelPrice(entry: LiteLlmEntry): ModelPrice | null {
  */
 export function candidateKeys(model: string, litellmProvider: string): string[] {
   const base = model.trim();
-  const withoutVendor = base.includes('/') ? (base.split('/').pop() ?? base) : base;
+  const withoutVendor = stripVendorPrefix(base);
   const candidates = [
     base,
     `${litellmProvider}/${base}`,
     withoutVendor,
     `${litellmProvider}/${withoutVendor}`,
   ];
-  const undated = withoutVendor.replace(DATE_SUFFIX_RE, '');
+  const undated = stripDateSuffix(withoutVendor);
   if (undated !== withoutVendor) {
     candidates.push(undated, `${litellmProvider}/${undated}`);
   }

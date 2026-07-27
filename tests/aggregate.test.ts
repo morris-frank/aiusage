@@ -125,6 +125,21 @@ describe('aggregateByDimension', () => {
     expect(bucket?.label).toBe('user_9');
   });
 
+  it('groups by model canonically, merging an OpenRouter-prefixed id with the first-party spelling', () => {
+    const buckets = aggregateByDimension(
+      [
+        costedRecord({ provider: 'openrouter', model: 'anthropic/claude-opus-5', costMicros: 200 }),
+        costedRecord({ provider: 'anthropic', model: 'claude-opus-5', costMicros: 100 }),
+        costedRecord({ provider: 'openai', model: 'gpt-5.6', costMicros: 50 }),
+      ],
+      'model',
+    );
+    expect(buckets.map((bucket) => [bucket.key, bucket.label, bucket.costMicros])).toEqual([
+      ['claude-opus-5', 'claude-opus-5', 300],
+      ['gpt-5.6', 'gpt-5.6', 50],
+    ]);
+  });
+
   it('groups across providers when asked', () => {
     const buckets = aggregateByDimension(
       [

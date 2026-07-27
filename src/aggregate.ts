@@ -12,6 +12,7 @@
 
 import type { CostedRecord, CostSource } from './cost.js';
 import { periodInRange, periodKey } from './dates.js';
+import { canonicalModelId } from './models.js';
 import { sumReportedMicros } from './money.js';
 import {
   type DateRange,
@@ -152,10 +153,14 @@ export function dimensionOf(
   dimension: SplitDimension,
 ): { key: string; label: string } {
   switch (dimension) {
-    case 'model':
-      return record.model
-        ? { key: record.model, label: record.model }
-        : { key: '(unspecified)', label: '(model not reported)' };
+    case 'model': {
+      if (!record.model) return { key: '(unspecified)', label: '(model not reported)' };
+      // Canonical id for both key and label: a vendor-prefixed OpenRouter id
+      // and a platform's own first-party id for the same model group under
+      // one row, deterministically, regardless of which record is seen first.
+      const canonical = canonicalModelId(record.model);
+      return { key: canonical, label: canonical };
+    }
     case 'apiKey':
       return principalOf(record.apiKey, 'API key');
     case 'account':
