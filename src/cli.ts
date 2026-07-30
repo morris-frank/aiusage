@@ -25,7 +25,13 @@ import { renderReportHtml, renderReportSvg } from './chart/index.js';
 import { collectUsage, createHttpClient } from './collect.js';
 import { type ConfigError, loadConfig, type RuntimeConfig } from './config.js';
 import { applyCosts, type CostingResult } from './cost.js';
-import { DateInputError, defaultRange, isValidTimeZone, parseDateInput } from './dates.js';
+import {
+  DateInputError,
+  defaultRange,
+  isValidTimeZone,
+  parseDateInput,
+  toDateString,
+} from './dates.js';
 import { loadPriceBook, type PriceBook } from './pricing/index.js';
 import type { CommandRunner } from './providers/ccusage.js';
 import {
@@ -82,7 +88,7 @@ USAGE
   aiusage pricing [--model <id>]     unit prices, with their source
   aiusage report [--out <file>]      the report figure (SVG, or --format html);
                                       90-day default window, --local implied,
-                                      saved as HTML to ~/Downloads unless
+                                      saved as HTML to ~/code/morris-frank/vault/sources unless
                                       --print or --out says otherwise
 
 OPTIONS
@@ -99,7 +105,7 @@ OPTIONS
   -O, --offline              price from the cached tables only; never fetch
       --out <file>           write the figure to a file instead of stdout
       --format <svg|html>    figure format for the report command (default: svg,
-                              or html when --local saves to ~/Downloads)
+                              or html when --local saves to ~/code/morris-frank/vault/sources)
       --print                print the report figure to stdout even with --local
       --granularity <g>      report grain: daily|weekly|monthly (default: daily)
       --no-cost              omit cost entirely (tokens only)
@@ -153,7 +159,7 @@ export type CliEnvironment = {
   stderr: (text: string) => void;
   now: Date;
   isTty: boolean;
-  /** The user's home directory, for `report --local`'s default ~/Downloads path. */
+  /** The user's home directory, for `report --local`'s default ~/code/morris-frank/vault/sources path. */
   homeDir: string;
   /** Injected so `cli.ts` stays free of side effects and stays testable. */
   writeFile?: (path: string, content: string) => void;
@@ -334,7 +340,7 @@ function emit(
  * The figure. `--json` still emits the report the figure was drawn from, so the
  * numbers behind a picture are always obtainable from the same invocation.
  *
- * `report --local` defaults to a file in `~/Downloads` rather than stdout: a
+ * `report --local` defaults to a file in `~/code/morris-frank/vault/sources` rather than stdout: a
  * one-off local run is usually a person looking at their own machine, not a
  * script consuming the output, and raw SVG dumped to a terminal is not
  * something anyone reads there. `--print` (or an explicit `--out`) opts back
@@ -375,10 +381,14 @@ function defaultReportPath(
   options: ParsedOptions,
   format: 'svg' | 'html',
 ): string {
+  const today = toDateString(environment.now);
   return join(
     environment.homeDir,
-    'Downloads',
-    `aiusage-report-${options.range.since}-to-${options.range.until}.${format}`,
+    'code',
+    'morris-frank',
+    'vault',
+    'sources',
+    `${today}-aiusage-report-${options.range.since}-to-${options.range.until}.${format}`,
   );
 }
 

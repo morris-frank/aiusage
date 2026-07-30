@@ -488,10 +488,10 @@ describe('the local source and the figure', () => {
     expect(out).toHaveLength(0);
     expect(written).toHaveLength(1);
     expect(written[0]?.path).toBe(
-      '/home/tester/Downloads/aiusage-report-2026-04-28-to-2026-07-26.html',
+      `/home/tester/code/morris-frank/vault/sources/2026-07-26-aiusage-report-2026-04-28-to-2026-07-26.html`,
     );
     expect(written[0]?.content.startsWith('<!doctype html>')).toBe(true);
-    expect(err.join('\n')).toContain('Wrote /home/tester/Downloads/');
+    expect(err.join('\n')).toContain('Wrote /home/tester/code/morris-frank/vault/sources/');
   });
 
   it('--no-local drops local fusion for report even though it is the default', async () => {
