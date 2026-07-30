@@ -246,6 +246,9 @@ describe('report figure', () => {
     expect(html).toContain('background: #fff');
     expect(html).toContain('class="left period">2026-07-25<');
     expect(html).toContain('some-model');
+    expect(html).toContain('<figcaption>');
+    expect(html).toContain('<caption>One row per day with usage.');
+    expect(html).toContain('<th scope="col"');
   });
 
   it('gives the table the shape of its numbers, and a provenance badge per row', () => {
@@ -293,6 +296,54 @@ describe('report figure', () => {
     expect(html).toContain('class="badge unsupported"');
     expect(html).toContain('no splits');
     expect(html).toContain('unknown, not zero');
+  });
+
+  it('keeps skipped sources and diagnostics visible because absent is not zero', () => {
+    const html = renderReportHtml(
+      report([row('2026-07-25', { anthropic: 2 })], {
+        providers: [
+          {
+            id: 'openai',
+            label: 'OpenAI',
+            status: 'skipped',
+            capabilities: {
+              usage: false,
+              reportedCost: false,
+              splitByModel: false,
+              splitByApiKey: false,
+              splitByAccount: false,
+              splitByWorkspace: false,
+              livePricing: false,
+              maxLookbackDays: null,
+            },
+            identity: null,
+            recordCount: 0,
+            costSource: 'unavailable',
+          },
+        ],
+        notices: [
+          {
+            provider: 'openai',
+            level: 'info',
+            code: 'not-configured',
+            message: 'OpenAI is not configured — usage is unknown, not zero.',
+          },
+        ],
+      }),
+      OPTIONS,
+    );
+
+    expect(html).toContain('OpenAI');
+    expect(html).toContain('class="badge skipped"');
+    expect(html).toContain('<h2>Notices</h2>');
+    expect(html).toContain('not-configured');
+  });
+
+  it('describes the SVG and its provenance for screen-reader users', () => {
+    const svg = renderReportSvg(report([row('2026-07-25', { anthropic: 2 })]), OPTIONS);
+    expect(svg).toContain('aria-labelledby="aiusage-chart-title aiusage-chart-desc"');
+    expect(svg).toContain('<desc id="aiusage-chart-desc">');
+    expect(svg).toContain('Cost provenance and incomplete-source status');
   });
 
   it('ranks models by cost, coloured by provider rather than by model', () => {

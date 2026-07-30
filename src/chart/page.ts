@@ -44,9 +44,11 @@ ${headerBlock(report, options)}
 ${cards(report, options)}
 <figure>
 ${renderReportSvg(report, { ...options, header: false })}
+${figureCaption(report, options)}
 </figure>
 ${periodTable(report, rows, options)}
 ${sourceTable(report, options)}
+${noticeList(report)}
 </main>
 </body>
 </html>
@@ -67,6 +69,7 @@ body { margin: 0; background: #fff; color: var(--fg); font-family: ${TOKEN.font}
 main { max-width: 1100px; margin: 0 auto; padding: 40px 28px 80px; }
 figure { margin: 32px 0 0; }
 svg { width: 100%; height: auto; display: block; }
+figcaption { max-width: 78ch; margin: 12px 0 0; color: var(--muted); font-size: 12px; }
 
 .eyebrow { font-size: 10.5px; font-weight: 600; letter-spacing: 0.16em; color: var(--lime);
            text-transform: uppercase; }
@@ -90,6 +93,8 @@ h2 + .note { margin: 0 0 14px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 12.5px;
         font-variant-numeric: tabular-nums; }
+caption { text-align: left; color: var(--muted); font-size: 12.5px; padding: 0 0 12px; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 thead th { position: sticky; top: 0; background: #fff; text-align: right; font-weight: 500;
            color: var(--muted); font-size: 10.5px; letter-spacing: 0.06em;
            text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
@@ -131,12 +136,19 @@ tfoot td.left { text-align: left; }
 .badge.ok { background: var(--soft); color: var(--soft-ink); }
 .badge.partial, .badge.unsupported, .badge.skipped { background: var(--cream); color: var(--muted); }
 .badge.error { background: var(--warn-soft); color: var(--warn-soft-ink); }
+.notices { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 12.5px; }
+.notices li { margin: 5px 0; }
+.notice-code { color: var(--ink); font-family: ${TOKEN.mono}; font-size: 11px; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+           overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 @media print {
   main { padding: 0; max-width: none; }
   thead th { position: static; }
   h2 { break-after: avoid; }
   tbody tr { break-inside: avoid; }
+  .table-scroll { overflow: visible; }
 }`;
 }
 
@@ -196,6 +208,15 @@ ${entries
 </div>`;
 }
 
+function figureCaption(report: PeriodReport, options: ChartOptions): string {
+  const cost = options.includeCost
+    ? `Cost is ${report.totals.costSource}; definitions and price sources are carried inside the figure.`
+    : 'Cost was not collected, so the figure shows tokens only.';
+  return `<figcaption>${escapeXml(
+    `Shared, zero-based scales support comparison by position and length. ${cost} Exact values and source status follow below.`,
+  )}</figcaption>`;
+}
+
 function periodTable(
   report: PeriodReport,
   rows: readonly ReportRow[],
@@ -246,20 +267,22 @@ function periodTable(
   if (options.includeCost) head.push('Cost');
 
   return `<h2>${escapeXml(periodNoun(report, true))}</h2>
-<p class="note">One row per ${noun.toLowerCase()} with usage. Bars are each row's share of the largest in its column; the four-segment bar is that ${noun.toLowerCase()}'s token mix (input, output, cache write, cache read).</p>
+<div class="table-scroll">
 <table>
+<caption>One row per ${noun.toLowerCase()} with usage. Cost bars share a common scale; the four-segment bar shows that ${noun.toLowerCase()}'s token mix (input, output, cache write, cache read).</caption>
 <thead><tr>${head
     .map((label, index) =>
       index < 3
-        ? `<th class="left">${escapeXml(label || noun)}</th>`
-        : `<th>${escapeXml(label)}</th>`,
+        ? `<th scope="col" class="left">${escapeXml(label || noun)}</th>`
+        : `<th scope="col">${escapeXml(label)}</th>`,
     )
     .join('')}</tr></thead>
 <tbody>
 ${body}
 </tbody>
 <tfoot><tr>${totalCells.join('')}</tr></tfoot>
-</table>`;
+</table>
+</div>`;
 }
 
 function sourceTable(report: PeriodReport, options: ChartOptions): string {
@@ -274,7 +297,6 @@ function sourceTable(report: PeriodReport, options: ChartOptions): string {
   };
 
   const body = report.meta.providers
-    .filter((provider) => provider.status !== 'skipped')
     .map((provider) => {
       // Find all notices for this provider to show as tooltip
       const providerNotices = report.meta.notices.filter((n) => n.provider === provider.id);
@@ -294,15 +316,32 @@ function sourceTable(report: PeriodReport, options: ChartOptions): string {
     .join('\n');
 
   return `<h2>Sources</h2>
-<p class="note">What each source actually answered for this run, not what its documentation allows. A source that is not <code>ok</code> is missing from the totals above — unknown, not zero.</p>
+<div class="table-scroll">
 <table>
-<thead><tr><th class="left">Source</th><th class="left">Status</th><th>Rows</th>${
-    options.includeCost ? '<th>Cost</th>' : ''
-  }<th class="left">Split by</th></tr></thead>
+<caption>What each source actually answered for this run. A non-<code>ok</code> source may leave the totals incomplete; absent usage is unknown, not zero.</caption>
+<thead><tr><th scope="col" class="left">Source</th><th scope="col" class="left">Status</th><th scope="col">Rows</th>${
+    options.includeCost ? '<th scope="col">Cost</th>' : ''
+  }<th scope="col" class="left">Split by</th></tr></thead>
 <tbody>
 ${body}
 </tbody>
-</table>`;
+</table>
+</div>`;
+}
+
+function noticeList(report: PeriodReport): string {
+  if (report.meta.notices.length === 0) return '';
+  const items = report.meta.notices
+    .map(
+      (notice) =>
+        `<li><span class="notice-code">${escapeXml(notice.code)}</span> — ${escapeXml(notice.message)}</li>`,
+    )
+    .join('\n');
+  return `<h2>Notices</h2>
+<p class="note">Diagnostics emitted by the collection and costing run. These are visible text, not tooltip-only metadata.</p>
+<ul class="notices">
+${items}
+</ul>`;
 }
 
 function number(value: number): string {
@@ -329,7 +368,7 @@ function mixBar(row: ReportRow): string {
   const segments = TOKEN_CLASSES.map((klass) => {
     const share = ((counts[klass.key] ?? 0) / total) * 100;
     return share > 0
-      ? `<span style="width:${share.toFixed(1)}%;background:${klass.colour}" title="${escapeXml(klass.label)}"></span>`
+      ? `<span style="width:${share.toFixed(1)}%;background:${klass.colour}" title="${escapeXml(klass.label)}"><span class="sr-only">${escapeXml(klass.label)} ${share.toFixed(1)}%</span></span>`
       : '';
   }).join('');
   return `<span class="mix">${segments}</span>`;

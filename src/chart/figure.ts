@@ -168,11 +168,28 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   ];
 
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}" role="img">`,
-    `<title>${escapeXml(titleOf(options))}</title>`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}" role="img" aria-labelledby="aiusage-chart-title aiusage-chart-desc">`,
+    `<title id="aiusage-chart-title">${escapeXml(titleOf(options))}</title>`,
+    `<desc id="aiusage-chart-desc">${escapeXml(
+      chartDescription(report, options, series, rankedModels),
+    )}</desc>`,
     parts.join('\n'),
     '</svg>',
   ].join('\n');
+}
+
+function chartDescription(
+  report: PeriodReport,
+  options: ChartOptions,
+  series: readonly Series[],
+  rankedModels: readonly RankedModel[],
+): string {
+  const { since, until } = report.meta.range;
+  const measure = options.includeCost ? 'cost and token usage' : 'token usage';
+  const reporting = report.meta.providers.filter((provider) => provider.status === 'ok').length;
+  const incomplete = report.meta.providers.length - reporting;
+  const ranking = rankedModels.length > 1 ? ', a model ranking,' : '';
+  return `${titleOf(options)} from ${since} to ${until}, showing ${measure} over time${ranking} and token-class mix across ${series.length} ${SERIES_NOUN[options.series]} series. ${reporting} sources fully reported; ${incomplete} were partial, skipped, unsupported, or failed. Cost provenance and incomplete-source status are stated in the figure caption.`;
 }
 
 export function periodsOf(report: PeriodReport): ReportRow[] {
