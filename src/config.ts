@@ -54,15 +54,10 @@ export type AnthropicCredentials = {
   adminKey: string;
 };
 
-export type TogetherCredentials = {
-  apiKey: string;
-};
-
 export type Credentials = {
   openrouter: OpenRouterCredentials | null;
   openai: OpenAICredentials | null;
   anthropic: AnthropicCredentials | null;
-  together: TogetherCredentials | null;
 };
 
 /**
@@ -189,20 +184,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
   const openrouterKeys = parseOpenRouterKeys(env);
   const openaiAdminKey = trimmed(env.OPENAI_ADMIN_KEY);
   const anthropicAdminKey = trimmed(env.ANTHROPIC_ADMIN_KEY);
-  const togetherApiKey = trimmed(env.TOGETHER_API_KEY);
 
   const credentials: Credentials = {
     openrouter: openrouterKeys.length > 0 ? { keys: openrouterKeys } : null,
     openai: openaiAdminKey ? { adminKey: openaiAdminKey, orgId: trimmed(env.OPENAI_ORG_ID) } : null,
     anthropic: anthropicAdminKey ? { adminKey: anthropicAdminKey } : null,
-    together: togetherApiKey ? { apiKey: togetherApiKey } : null,
   };
 
   const secrets = [
     ...openrouterKeys.map((key) => key.secret),
     openaiAdminKey,
     anthropicAdminKey,
-    togetherApiKey,
   ].filter((value): value is string => value !== null);
 
   const ccusageCommand = trimmed(env.AIUSAGE_CCUSAGE_CMD);
@@ -224,7 +216,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
 export function configuredProviders(credentials: Credentials): ProviderId[] {
   const configured: ProviderId[] = [];
   if (credentials.openrouter) configured.push('openrouter');
-  if (credentials.together) configured.push('together');
   if (credentials.openai) configured.push('openai');
   if (credentials.anthropic) configured.push('anthropic');
   return configured;
@@ -233,7 +224,6 @@ export function configuredProviders(credentials: Credentials): ProviderId[] {
 /** The env var names a provider reads, for "how do I enable this" messages. */
 export const CREDENTIAL_ENV_VARS: Record<ProviderId, string[]> = {
   openrouter: ['OPENROUTER_API_KEY', 'OPENROUTER_MANAGEMENT_KEY[_LABEL]'],
-  together: ['TOGETHER_API_KEY'],
   openai: ['OPENAI_ADMIN_KEY'],
   anthropic: ['ANTHROPIC_ADMIN_KEY'],
   // Not a credential: the local source is enabled by a flag, not by a key.

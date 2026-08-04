@@ -4,7 +4,6 @@ import { ANTHROPIC_CAPABILITIES, createAnthropicProvider } from './anthropic.js'
 import { CCUSAGE_CAPABILITIES, type CommandRunner, createCcusageProvider } from './ccusage.js';
 import { createOpenAIProvider, OPENAI_CAPABILITIES } from './openai.js';
 import { createOpenRouterProvider, OPENROUTER_CAPABILITIES } from './openrouter.js';
-import { createTogetherProvider, TOGETHER_CAPABILITIES } from './together.js';
 import type { Provider } from './types.js';
 
 export type { CollectContext, Provider } from './types.js';
@@ -15,7 +14,6 @@ export type { CollectContext, Provider } from './types.js';
  */
 export const DECLARED_CAPABILITIES: Record<ProviderId, ProviderCapabilities> = {
   openrouter: OPENROUTER_CAPABILITIES,
-  together: TOGETHER_CAPABILITIES,
   openai: OPENAI_CAPABILITIES,
   anthropic: ANTHROPIC_CAPABILITIES,
   ccusage: CCUSAGE_CAPABILITIES,
@@ -33,7 +31,6 @@ export function createProviders(
 ): Provider[] {
   const providers: Provider[] = [];
   if (credentials.openrouter) providers.push(createOpenRouterProvider(credentials.openrouter));
-  if (credentials.together) providers.push(createTogetherProvider(credentials.together));
   if (credentials.openai) providers.push(createOpenAIProvider(credentials.openai));
   if (credentials.anthropic) providers.push(createAnthropicProvider(credentials.anthropic));
   if (local) providers.push(createCcusageProvider(local, localRunner));

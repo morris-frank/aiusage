@@ -10,7 +10,7 @@ import {
   candidateKeys,
   type LiteLlmPayload,
 } from '../src/pricing/litellm.js';
-import { buildOpenRouterPriceBook, buildTogetherPriceBook } from '../src/pricing/remote.js';
+import { buildOpenRouterPriceBook } from '../src/pricing/remote.js';
 import { stubFetch } from './helpers/http.js';
 
 const LITELLM: LiteLlmPayload = {
@@ -112,33 +112,6 @@ describe('OpenRouter price book', () => {
 
   it('ignores models priced dynamically', () => {
     expect(book.lookup('openrouter', 'dynamic/model')).toBeNull();
-  });
-});
-
-describe('Together price book', () => {
-  it('reads the catalogue as USD per million tokens', () => {
-    const book = buildTogetherPriceBook([
-      { id: 'meta-llama/Llama-4', pricing: { input: 0.88, output: 0.88, cached_input: 0.2 } },
-    ]);
-    const found = book.lookup('together', 'meta-llama/Llama-4');
-    expect(found?.price.inputPerToken).toBeCloseTo(8.8e-7, 12);
-    expect(found?.price.cacheReadPerToken).toBeCloseTo(2e-7, 12);
-    // The unit is an assumption, so the source label says so.
-    expect(found?.source).toContain('unit assumed');
-  });
-
-  it('drops implausible numbers rather than reporting a wrong unit', () => {
-    const book = buildTogetherPriceBook([
-      { id: 'weird/model', pricing: { input: 5_000_000, output: 1 } },
-    ]);
-    expect(book.lookup('together', 'weird/model')).toBeNull();
-  });
-
-  it('accepts either payload envelope', () => {
-    const wrapped = buildTogetherPriceBook({
-      data: [{ id: 'a/b', pricing: { input: 1, output: 2 } }],
-    });
-    expect(wrapped.lookup('together', 'a/b')).not.toBeNull();
   });
 });
 
@@ -255,7 +228,7 @@ describe('loadPriceBook', () => {
       cacheDir: dir,
       offline: true,
       providers: ['openai'],
-      credentials: { openrouter: null, openai: null, anthropic: null, together: null },
+      credentials: { openrouter: null, openai: null, anthropic: null },
     });
 
     expect(priceBook.lookup('openai', 'gpt-5.3')).toBeNull();
@@ -277,7 +250,7 @@ describe('loadPriceBook', () => {
       cacheDir: dir,
       offline: false,
       providers: ['openrouter', 'anthropic'],
-      credentials: { openrouter: null, openai: null, anthropic: null, together: null },
+      credentials: { openrouter: null, openai: null, anthropic: null },
     });
 
     expect(priceBook.lookup('openrouter', 'openai/gpt-5.3')?.price.inputPerToken).toBe(0.1);

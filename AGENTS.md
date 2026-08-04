@@ -76,7 +76,7 @@ src/
   bin.ts            the executable: process wiring only
   pricing/          price books: platform catalogues, LiteLLM table, disk cache
   providers/        one module per platform, plus ccusage.ts (local agents) and pagination
-tests/              vitest; fixtures inline, HTTP stubbed, integration.test.ts spans all four
+tests/              vitest; fixtures inline, HTTP stubbed, integration.test.ts spans every source
 ```
 
 ## Conventions

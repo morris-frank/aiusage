@@ -14,11 +14,8 @@ import { PriceCache } from './cache.js';
 import { buildLiteLlmPriceBook, LITELLM_PRICES_URL, type LiteLlmPayload } from './litellm.js';
 import {
   buildOpenRouterPriceBook,
-  buildTogetherPriceBook,
   OPENROUTER_MODELS_URL,
   type OpenRouterModelsPayload,
-  TOGETHER_MODELS_URL,
-  type TogetherModelsPayload,
 } from './remote.js';
 import { EMPTY_PRICE_BOOK, type PriceBook, type PriceLookup } from './types.js';
 
@@ -95,30 +92,10 @@ export async function loadPriceBook(options: LoadPriceBookOptions): Promise<Load
     if (models) openrouterBook = buildOpenRouterPriceBook(models.payload);
   }
 
-  let togetherBook = EMPTY_PRICE_BOOK;
-  const togetherKey = options.credentials.together?.apiKey;
-  if (wanted.has('together') && togetherKey) {
-    const models = await loadSource<TogetherModelsPayload>({
-      cache,
-      name: 'together-models',
-      offline: options.offline,
-      // Together's catalogue is authenticated, unlike OpenRouter's.
-      fetcher: () =>
-        options.http.json<TogetherModelsPayload>(TOGETHER_MODELS_URL, {
-          headers: { authorization: `Bearer ${togetherKey}` },
-        }),
-      diagnostics,
-      label: 'Together model catalogue',
-      provider: 'together',
-    });
-    if (models) togetherBook = buildTogetherPriceBook(models.payload);
-  }
-
   return {
     diagnostics,
     priceBook: createCompositePriceBook({
       openrouter: [openrouterBook, litellmBook],
-      together: [togetherBook, litellmBook],
       openai: [litellmBook],
       anthropic: [litellmBook],
     }),

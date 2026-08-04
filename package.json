@@ -1,13 +1,12 @@
 {
   "name": "aiusage",
   "version": "0.1.0",
-  "description": "ccusage-shaped usage and cost reporting for remote LLM platform APIs (OpenRouter, Together AI, OpenAI, Anthropic)",
+  "description": "ccusage-shaped usage and cost reporting for remote LLM platform APIs (OpenRouter, OpenAI, Anthropic)",
   "keywords": [
     "llm",
     "usage",
     "cost",
     "openrouter",
-    "together",
     "openai",
     "anthropic",
     "ccusage",

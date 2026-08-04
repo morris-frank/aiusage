@@ -24,19 +24,19 @@ Each platform answers a different subset of the question. `aiusage` reports what
 actually get and leaves the differences intact. Run `aiusage providers` to see this
 for your own credentials.
 
-| | OpenRouter | Together AI | OpenAI Platform | Claude Platform | Local (ccusage) |
-|---|---|---|---|---|---|
-| Token usage | yes | **no API** | yes | yes | yes (local logs) |
-| Cost | reported per row | **no API** | per project-day | per model-day | `imported` |
-| Split by model | yes | — | yes | yes | yes |
-| Split by API key | with a management key | — | yes | yes | no |
-| Split by user account | derived from key ownership | — | yes | yes | no |
-| Split by workspace/project | yes | — | yes | yes | no |
-| Split by agent | — | — | — | — | yes |
-| Cache tokens reported | no | — | read + write | read + 5m/1h write | read + write |
-| Request counts | yes | — | yes | no | no |
-| Lookback | 30 days | — | unlimited | unlimited | as far as the logs go |
-| Live unit prices | `/api/v1/models` | `/v1/models` | LiteLLM table | LiteLLM table | ccusage's own |
+| | OpenRouter | OpenAI Platform | Claude Platform | Local (ccusage) |
+|---|---|---|---|---|
+| Token usage | yes | yes | yes | yes (local logs) |
+| Cost | reported per row | per project-day | per model-day | `imported` |
+| Split by model | yes | yes | yes | yes |
+| Split by API key | with a management key | yes | yes | no |
+| Split by user account | derived from key ownership | yes | yes | no |
+| Split by workspace/project | yes | yes | yes | no |
+| Split by agent | — | — | — | yes |
+| Cache tokens reported | no | read + write | read + 5m/1h write | read + write |
+| Request counts | yes | yes | no | no |
+| Lookback | 30 days | unlimited | unlimited | as far as the logs go |
+| Live unit prices | `/api/v1/models` | LiteLLM table | LiteLLM table | ccusage's own |
 
 **Several OpenRouter workspaces.** An OpenRouter management key is scoped to one
 workspace, so the credential is a *list*: set `OPENROUTER_MANAGEMENT_KEY_<LABEL>` once per
@@ -48,7 +48,7 @@ as one, and a key visible to two management keys is collected once.
 
 **Local agents (`--local`).** [ccusage](https://github.com/ryoppippi/ccusage) reads the
 coding agents' own logs on this machine and prices them itself. `aiusage --local` runs it
-and fuses its rows in as a fifth source, split by **agent** (`aiusage agents`). Two things
+and fuses its rows in as a fourth source, split by **agent** (`aiusage agents`). Two things
 this changes, both stated on every run: its cost is labelled `imported`
 (see below), distinct from `reported`, and an agent billed through an API key is also inside
 that platform's total, so the fused number can count the same traffic twice.
@@ -61,12 +61,12 @@ entirely on its last-activity day). Measured on one machine, that shifted a 27-d
 window's total by about 16% for no real gain, since ccusage only reports project paths for
 some agents in the first place. `daily`'s exact day-bucketed totals win.
 
-**Together AI has no usage or cost API.** Its cost analytics are dashboard-only, and the
-public API reference contains no usage, cost, billing or audit endpoint (checked
-2026-07-26). `aiusage` verifies the key, reports the identity it belongs to, contributes
-live per-model pricing, and reports Together's usage as `unsupported` with a warning. A
-missing Together total means *unknown*. When Together ships an endpoint, only
-[`src/providers/together.ts`](src/providers/together.ts) needs to change.
+**Together AI is not supported.** It publishes no usage or cost API — cost analytics are
+dashboard-only, and the public API reference contains no usage, cost, billing or audit
+endpoint (checked 2026-07-26). An earlier version shipped a Together provider that could
+only verify the key and contribute unit prices, never a single usage row; it was removed
+rather than kept as a source that answers nothing. Spend on Together has to be read from
+Together's own dashboard.
 
 ## Credentials
 
@@ -81,7 +81,6 @@ without credentials is **skipped and said so**.
 | `OPENAI_ADMIN_KEY` | OpenAI | Must be an **admin** key; project keys get 401. |
 | `OPENAI_ORG_ID` | OpenAI | Only for multi-org admin keys. |
 | `ANTHROPIC_ADMIN_KEY` | Claude | Admin API key (`sk-ant-admin…`) or org OAuth token. |
-| `TOGETHER_API_KEY` | Together | Identity and pricing only. |
 | `AIUSAGE_CCUSAGE_CMD` | Local | How to run ccusage for `--local`; discovered otherwise. |
 | `AIUSAGE_REPORT_DIR` | — | Where `report` saves its figure; the working directory otherwise. |
 
@@ -111,8 +110,8 @@ all of them attribute *tokens* that far. Two consequences worth knowing:
   audio, that billed cost is included in the OpenAI total and allocated across the
   completions usage `aiusage` collects. The `completions-only` notice says so on every run.
 
-Unit prices come from the platform's own catalogue where one exists (OpenRouter, Together)
-and otherwise from [LiteLLM's price table](https://github.com/BerriAI/litellm), the same
+Unit prices come from the platform's own catalogue where one exists (OpenRouter) and
+otherwise from [LiteLLM's price table](https://github.com/BerriAI/litellm), the same
 source `ccusage` prices Claude Code with. `meta.priceSources` records which was used;
 `aiusage pricing` shows the per-model prices and the key each was matched on.
 
@@ -294,7 +293,8 @@ npm pack --dry-run
 
 ## Known limits
 
-- Together AI usage is not obtainable (see above).
+- Together AI is not a source at all: it exposes no usage API (see above), so Together spend
+  is absent from every total here rather than reported as unknown.
 - OpenAI: only *completions* usage is collected; other products' cost lands in
   `unattributedCost` or is allocated across completions (flagged per run).
 - OpenRouter: no cache-token split, 30-day lookback, and account attribution is derived
@@ -306,9 +306,6 @@ npm pack --dry-run
 - Local agent rows are not re-priced: an agent log names a model but not the vendor that
   served it, so `aiusage` reports ccusage's figure as `imported` without guessing a
   vendor to look the price up under.
-- **Unresolved:** Together's `/v1/models` price unit is undocumented and its catalogue
-  needs a key, so it is read as USD per million tokens with implausible values dropped.
-  Verify against an invoice before relying on Together prices.
 - Canonical model grouping (above) only strips a vendor prefix and a pinned-snapshot date;
   it does not catch a platform's own internal version string that has no mechanical relation
   to another surface's spelling. Two distinct dated snapshots of a model you wanted to tell

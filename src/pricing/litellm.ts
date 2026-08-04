@@ -43,7 +43,6 @@ const LITELLM_PROVIDER: Partial<Record<ProviderId, string>> = {
   openai: 'openai',
   anthropic: 'anthropic',
   openrouter: 'openrouter',
-  together: 'together_ai',
 };
 
 function numberOrNull(value: number | undefined): number | null {

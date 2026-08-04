@@ -78,10 +78,16 @@ function fixtures(includeCost = true): {
   const collection: Collection = {
     results: [
       providerResult('anthropic', []),
-      { ...providerResult('together', []), status: 'unsupported' },
+      // A source that contributed nothing still has to appear in the report.
+      { ...providerResult('openai', []), status: 'skipped' },
     ],
     diagnostics: [
-      { provider: 'together', level: 'warning', code: 'usage-api-unavailable', message: 'no API' },
+      {
+        provider: 'openai',
+        level: 'warning',
+        code: 'not-configured',
+        message: 'OpenAI Platform is not configured. Its usage is unknown, not zero.',
+      },
     ],
   };
   const costing: CostingResult = {
@@ -193,9 +199,9 @@ describe('aiusage additions', () => {
     expect(anthropic?.recordCount).toBe(1);
     expect(anthropic?.totalCost).toBeCloseTo(2.5, 9);
 
-    const together = report.meta.providers.find((provider) => provider.id === 'together');
-    expect(together?.status).toBe('unsupported');
-    expect(together?.recordCount).toBe(0);
+    const openai = report.meta.providers.find((provider) => provider.id === 'openai');
+    expect(openai?.status).toBe('skipped');
+    expect(openai?.recordCount).toBe(0);
   });
 
   it('reports unattributed billed cost separately from row totals', () => {
@@ -217,7 +223,7 @@ describe('aiusage additions', () => {
       priceSources: ['litellm@2026-07-26'],
       generatedAt: '2026-07-26T12:00:00.000Z',
     });
-    expect(meta.notices.map((notice) => notice.code)).toContain('usage-api-unavailable');
+    expect(meta.notices.map((notice) => notice.code)).toContain('not-configured');
   });
 
   it('keeps the version in step with package.json', () => {

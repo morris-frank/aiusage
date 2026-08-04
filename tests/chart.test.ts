@@ -179,9 +179,9 @@ describe('report figure', () => {
       report([row('2026-07-25', { anthropic: 2 })], {
         providers: [
           {
-            id: 'together',
-            label: 'Together AI',
-            status: 'unsupported',
+            id: 'openrouter',
+            label: 'OpenRouter',
+            status: 'error',
             capabilities: {
               usage: false,
               reportedCost: false,
@@ -210,7 +210,7 @@ describe('report figure', () => {
     );
 
     expect(svg).toContain('Cost provenance: reported');
-    expect(svg).toContain('Together AI (unsupported)');
+    expect(svg).toContain('OpenRouter (error)');
     expect(svg).toContain('unknown, not zero');
     expect(svg).toContain('$1.50 of billed cost is not token consumption');
     expect(svg).toContain('litellm@2026-07-26');
@@ -271,18 +271,18 @@ describe('report figure', () => {
       report([row('2026-07-25', { anthropic: 2 })], {
         providers: [
           {
-            id: 'together',
-            label: 'Together AI',
-            status: 'unsupported',
+            id: 'openrouter',
+            label: 'OpenRouter',
+            status: 'partial',
             capabilities: {
-              usage: false,
-              reportedCost: false,
+              usage: true,
+              reportedCost: true,
               splitByModel: false,
               splitByApiKey: false,
               splitByAccount: false,
               splitByWorkspace: false,
               livePricing: true,
-              maxLookbackDays: null,
+              maxLookbackDays: 30,
             },
             identity: null,
             recordCount: 0,
@@ -292,8 +292,8 @@ describe('report figure', () => {
       }),
       OPTIONS,
     );
-    expect(html).toContain('Together AI');
-    expect(html).toContain('class="badge unsupported"');
+    expect(html).toContain('OpenRouter');
+    expect(html).toContain('class="badge partial"');
     expect(html).toContain('no splits');
     expect(html).toContain('unknown, not zero');
   });

@@ -15,9 +15,9 @@ import type { CommandRunner } from '../src/providers/ccusage.js';
 import { type StubRoute, stubClient } from './helpers/http.js';
 
 /**
- * End to end over all four platforms at once: collect → cost → aggregate →
- * report, with every HTTP call answered from fixtures. This is the test that
- * would catch a break in the seam between the layers.
+ * End to end over every source at once: collect → cost → aggregate → report,
+ * with every HTTP call answered from fixtures. This is the test that would catch
+ * a break in the seam between the layers.
  */
 
 const NOW = new Date('2026-07-26T12:00:00Z');
@@ -39,7 +39,6 @@ const CONFIG: RuntimeConfig = {
         },
       ],
     },
-    together: { apiKey: 'together-key' },
     openai: { adminKey: 'sk-admin-key', orgId: null },
     anthropic: { adminKey: 'sk-ant-admin01-key' },
   },
@@ -82,8 +81,6 @@ const ROUTES: StubRoute[] = [
       ],
     },
   },
-  // ── Together: identity only; no usage API exists.
-  { when: 'api.together.xyz/v1/whoami', body: { organization_id: 'org_1', project_id: 'proj_t' } },
   // ── OpenAI: tokens per key/user/project, money per project-day.
   {
     when: 'api.openai.com/v1/organization/usage/completions',
@@ -276,7 +273,6 @@ const PRICE_BOOK = (() => {
   );
   return createCompositePriceBook({
     openrouter: [litellm],
-    together: [litellm],
     openai: [litellm],
     anthropic: [litellm],
   });
@@ -325,12 +321,11 @@ const LOCAL_RUNNER: CommandRunner = async () => ({
   }),
 });
 
-describe('the whole pipeline over four platforms', () => {
+describe('the whole pipeline over every source', () => {
   it('collects every platform that has a usage API, in a stable order', async () => {
     const { collection } = await pipeline();
     expect(collection.results.map((result) => [result.provider, result.status])).toEqual([
       ['openrouter', 'ok'],
-      ['together', 'unsupported'],
       ['openai', 'ok'],
       ['anthropic', 'ok'],
       // Local agent usage is opt-in, and its absence is stated rather than zeroed.
@@ -457,10 +452,10 @@ describe('the whole pipeline over four platforms', () => {
     ]);
     expect(Number(report.totals.totalCost?.toFixed(2))).toBe(43.25);
 
-    // Together is present, visibly unsupported, and contributes no rows.
-    const together = report.meta.providers.find((provider) => provider.id === 'together');
-    expect(together?.status).toBe('unsupported');
-    expect(report.meta.notices.map((notice) => notice.code)).toContain('usage-api-unavailable');
+    // The local source was not asked for, and says so rather than reading as zero.
+    const local = report.meta.providers.find((provider) => provider.id === 'ccusage');
+    expect(local?.status).toBe('skipped');
+    expect(report.meta.notices.map((notice) => notice.code)).toContain('not-configured');
   });
 
   it('carries on when one platform fails', async () => {
