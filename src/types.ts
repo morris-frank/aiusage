@@ -163,6 +163,16 @@ export type ProviderCapabilities = {
   splitByAccount: boolean;
   splitByWorkspace: boolean;
   livePricing: boolean;
+  /**
+   * Whether this run's usage came back in **sub-daily buckets**, which is the
+   * only thing a time-of-day statistic can be built from. A whole-day bucket
+   * says nothing about when inside the day the tokens were spent, and this tool
+   * will not spread it across 24 hours to make a shape appear.
+   *
+   * Declared as the ceiling and re-reported per run: a platform that supports
+   * hourly buckets still returns `false` on a run that did not ask for them.
+   */
+  hourly: boolean;
   /** How far back the platform's usage API reaches, in days; null = unbounded. */
   maxLookbackDays: number | null;
 };
@@ -175,6 +185,7 @@ export const NO_CAPABILITIES: Readonly<ProviderCapabilities> = Object.freeze({
   splitByAccount: false,
   splitByWorkspace: false,
   livePricing: false,
+  hourly: false,
   maxLookbackDays: null,
 });
 

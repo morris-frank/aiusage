@@ -8,7 +8,14 @@ const NOW = new Date('2026-07-26T12:00:00Z');
 
 function context(timeZone = 'UTC', range = { since: '2026-07-24', until: '2026-07-26' }) {
   const { http } = stubClient([]);
-  const ctx: CollectContext = { http, range, timeZone, concurrency: 2, now: NOW };
+  const ctx: CollectContext = {
+    http,
+    range,
+    timeZone,
+    hourlyBuckets: false,
+    concurrency: 2,
+    now: NOW,
+  };
   return ctx;
 }
 
@@ -186,6 +193,22 @@ describe('local agent source (ccusage)', () => {
     ).collect(context());
     expect(result.status).toBe('error');
     expect(result.diagnostics[0]?.message).toContain('not ccusage JSON');
+  });
+
+  it('never claims hourly buckets: `daily` rows are whole local days', async () => {
+    const result = await createCcusageProvider(
+      { command: ['ccusage'], offline: false, timeoutMs: 1000 },
+      runner(PAYLOAD),
+    ).collect({ ...context(), hourlyBuckets: true });
+
+    expect(result.status).toBe('ok');
+    expect(result.capabilities.hourly).toBe(false);
+    // The bucket a day's rows carry is a full local day, which is precisely why
+    // the time-of-day statistic must exclude them.
+    const [record] = result.records;
+    expect(Date.parse(record?.bucketEnd ?? '') - Date.parse(record?.bucketStart ?? '')).toBe(
+      86_400_000,
+    );
   });
 
   it('says out loud that local and platform rows can be the same traffic', () => {

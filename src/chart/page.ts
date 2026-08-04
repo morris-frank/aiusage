@@ -195,6 +195,29 @@ function cards(report: PeriodReport, options: ChartOptions): string {
     },
   ];
 
+  // Both derived statistics are absent when the collected grain cannot support
+  // them, and a card is only shown when its number exists — an empty card would
+  // read as a measured zero.
+  const timeOfDay = report.statistics.timeOfDay;
+  if (timeOfDay && timeOfDay.peakHour !== null) {
+    const peak = timeOfDay.hours.find((hour) => hour.hour === timeOfDay.peakHour);
+    entries.push({
+      label: 'Busiest hour',
+      value: `${String(timeOfDay.peakHour).padStart(2, '0')}:00`,
+      sub: `${report.meta.timezone}, over ${peak?.activeDays ?? 0} ${
+        (peak?.activeDays ?? 0) === 1 ? 'day' : 'days'
+      } · ${timeOfDay.sources.join(', ')} only`,
+    });
+  }
+  const concentration = report.statistics.concentration;
+  if (concentration && concentration.activePeriods > 1) {
+    entries.push({
+      label: 'Concentration',
+      value: `${(concentration.topDecileShare * 100).toFixed(0)}%`,
+      sub: `of ${concentration.measure} in the busiest ${concentration.topDecilePeriods} of ${concentration.activePeriods} ${periodNoun(report, true).toLowerCase()}`,
+    });
+  }
+
   return `<div class="cards">
 ${entries
   .map(
@@ -292,8 +315,11 @@ function sourceTable(report: PeriodReport, options: ChartOptions): string {
       provider.capabilities.splitByApiKey ? 'key' : null,
       provider.capabilities.splitByAccount ? 'account' : null,
       provider.capabilities.splitByWorkspace ? 'workspace' : null,
+      // Not a split, but the same kind of fact and the one that decides whether
+      // a source appears in the time-of-day panels at all.
+      provider.capabilities.hourly ? 'hourly' : null,
     ].filter((value): value is string => value !== null);
-    return splits.length > 0 ? chips(splits) : '<span class="chip">no splits</span>';
+    return splits.length > 0 ? chips(splits, 5) : '<span class="chip">no splits</span>';
   };
 
   const body = report.meta.providers
@@ -318,10 +344,10 @@ function sourceTable(report: PeriodReport, options: ChartOptions): string {
   return `<h2>Sources</h2>
 <div class="table-scroll">
 <table>
-<caption>What each source actually answered for this run. A non-<code>ok</code> source may leave the totals incomplete; absent usage is unknown, not zero.</caption>
+<caption>What each source actually answered for this run. A non-<code>ok</code> source may leave the totals incomplete; absent usage is unknown, not zero. A source without <code>hourly</code> reported whole days and is absent from the time-of-day panels.</caption>
 <thead><tr><th scope="col" class="left">Source</th><th scope="col" class="left">Status</th><th scope="col">Rows</th>${
     options.includeCost ? '<th scope="col">Cost</th>' : ''
-  }<th scope="col" class="left">Split by</th></tr></thead>
+  }<th scope="col" class="left">Answered</th></tr></thead>
 <tbody>
 ${body}
 </tbody>

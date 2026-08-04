@@ -103,6 +103,7 @@ const DECLARED: ProviderCapabilities = {
   splitByAccount: true,
   splitByWorkspace: true,
   livePricing: false,
+  hourly: true,
   maxLookbackDays: null,
 };
 
@@ -122,8 +123,9 @@ async function collect(
   const headers: Record<string, string> = { authorization: `Bearer ${credentials.adminKey}` };
   if (credentials.orgId) headers['openai-organization'] = credentials.orgId;
 
-  // Hourly buckets are the only way to group into a non-UTC day correctly.
-  const bucketWidth = context.timeZone === 'UTC' ? '1d' : '1h';
+  // Hourly buckets are the only way to group into a non-UTC day correctly, and
+  // also the only grain that can say *when in the day* usage happened.
+  const bucketWidth = context.hourlyBuckets || context.timeZone !== 'UTC' ? '1h' : '1d';
   const window = fetchWindow(context.range, context.timeZone);
 
   try {
@@ -145,6 +147,7 @@ async function collect(
       splitByAccount: groupBy.includes('user_id'),
       splitByWorkspace: groupBy.includes('project_id'),
       reportedCost: costRecords.length > 0,
+      hourly: bucketWidth === '1h',
     };
     diagnostics.push({
       provider: 'openai',
@@ -169,7 +172,7 @@ async function collect(
     return {
       provider: 'openai',
       status: 'error',
-      capabilities: { ...DECLARED, usage: false, reportedCost: false },
+      capabilities: { ...DECLARED, usage: false, reportedCost: false, hourly: false },
       records: [],
       costRecords: [],
       diagnostics,

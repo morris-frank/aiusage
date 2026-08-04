@@ -36,6 +36,11 @@ export type CollectOptions = {
   timeZone: string;
   /** Restrict the run to these providers; defaults to every configured one. */
   only?: readonly ProviderId[];
+  /**
+   * Ask every platform that can for sub-daily buckets. Only the time-of-day
+   * statistics need them, and they cost extra pages, so this is opt-in.
+   */
+  hourlyBuckets?: boolean;
   http?: HttpClient;
   now?: Date;
   /** Include local agent usage (ccusage). Null leaves it out entirely. */
@@ -67,6 +72,7 @@ export async function collectUsage(options: CollectOptions): Promise<Collection>
     http,
     range: options.range,
     timeZone: options.timeZone,
+    hourlyBuckets: options.hourlyBuckets ?? false,
     concurrency: options.config.concurrency,
     now,
   };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../src/report.js';
+import type { TimeOfDayStatistics } from '../src/statistics.js';
 
 function breakdown(name: string, cost: number, tokens = 1000): DimensionBreakdown {
   return {
@@ -69,9 +70,16 @@ function row(
   };
 }
 
-function report(rows: ReportRow[], overrides: Partial<PeriodReport['meta']> = {}): PeriodReport {
+function report(
+  rows: ReportRow[],
+  overrides: Partial<PeriodReport['meta']> = {},
+  statistics: Partial<PeriodReport['statistics']> = {},
+): PeriodReport {
   return {
     daily: rows,
+    // No time-of-day statistic by default: these fixtures are daily buckets, and
+    // that is exactly the case where the hour panels must not appear.
+    statistics: { timeOfDay: null, concentration: null, diagnostics: [], ...statistics },
     totals: {
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
@@ -190,6 +198,7 @@ describe('report figure', () => {
               splitByAccount: false,
               splitByWorkspace: false,
               livePricing: true,
+              hourly: false,
               maxLookbackDays: null,
             },
             identity: null,
@@ -282,6 +291,7 @@ describe('report figure', () => {
               splitByAccount: false,
               splitByWorkspace: false,
               livePricing: true,
+              hourly: false,
               maxLookbackDays: 30,
             },
             identity: null,
@@ -314,6 +324,7 @@ describe('report figure', () => {
               splitByAccount: false,
               splitByWorkspace: false,
               livePricing: false,
+              hourly: false,
               maxLookbackDays: null,
             },
             identity: null,
@@ -364,6 +375,40 @@ describe('report figure', () => {
     expect(svg).toContain('gpt-4o-mini-2024-07-18');
   });
 
+  it('never overprints two dates at the right edge of the axis', () => {
+    // 30 periods → a stride of 4, so the stride's last label lands on index 28.
+    // Labelling index 29 as well would smear two dates on top of each other.
+    const rows = Array.from({ length: 30 }, (_unused, index) =>
+      row(`2026-07-${String(index + 1).padStart(2, '0')}`, { anthropic: 1 }),
+    );
+    const labels = panel(renderReportSvg(report(rows), OPTIONS), 'cost-daily').match(
+      />2026-07-\d\d</g,
+    );
+
+    expect(labels).toEqual([
+      '>2026-07-01<',
+      '>2026-07-05<',
+      '>2026-07-09<',
+      '>2026-07-13<',
+      '>2026-07-17<',
+      '>2026-07-21<',
+      '>2026-07-25<',
+      '>2026-07-29<',
+    ]);
+  });
+
+  it('still labels the final period when the stride leaves room for it', () => {
+    // 9 periods → a stride of 2, so index 8 is both the stride's mark and the
+    // last period: the window's end stays labelled.
+    const rows = Array.from({ length: 9 }, (_unused, index) =>
+      row(`2026-07-0${index + 1}`, { anthropic: 1 }),
+    );
+    const labels = panel(renderReportSvg(report(rows), OPTIONS), 'cost-daily').match(
+      />2026-07-\d\d</g,
+    );
+    expect(labels?.at(-1)).toBe('>2026-07-09<');
+  });
+
   it('does not draw a ranking panel for zero or one model — there is nothing to rank', () => {
     const svg = renderReportSvg(
       report([
@@ -399,5 +444,165 @@ describe('report figure', () => {
     expect(svg).toContain('anthropic/claude-haiku-4.5 †');
     expect(svg).toContain('run under more than one agent');
     expect(svg).toContain('anthropic/claude-haiku-4.5 was run');
+  });
+});
+
+/** A time-of-day statistic with `cost` concentrated in the hours given. */
+function timeOfDay(byHour: Record<number, number>, overrides: Partial<TimeOfDayStatistics> = {}) {
+  const hours = Array.from({ length: 24 }, (_unused, hour) => ({
+    hour,
+    cost: byHour[hour] ?? null,
+    tokens: (byHour[hour] ?? 0) * 1000,
+    requests: null,
+    activeDays: byHour[hour] === undefined ? 0 : 1,
+  }));
+  const entries = Object.entries(byHour);
+  const peak = entries.sort(([, a], [, b]) => b - a)[0];
+  return {
+    hours,
+    week: entries.map(([hour], index) => ({
+      weekday: index + 1,
+      hour: Number(hour),
+      cost: byHour[Number(hour)] ?? null,
+      tokens: 1000,
+    })),
+    sources: ['anthropic' as const],
+    coarseSources: [],
+    excludedTokens: 0,
+    excludedCost: null,
+    peakHour: peak ? Number(peak[0]) : null,
+    measure: 'cost' as const,
+    ...overrides,
+  };
+}
+
+describe('time-of-day panels', () => {
+  it('draws no hour panel at all when no source reported sub-daily buckets', () => {
+    const svg = renderReportSvg(report([row('2026-07-25', { openrouter: 2 })]), OPTIONS);
+    // A flat 24-bar panel drawn from whole days would be an invented shape.
+    expect(svg).not.toContain('data-panel="time-of-day"');
+    expect(svg).not.toContain('data-panel="week-hours"');
+  });
+
+  it('draws one bar per busy hour on a clock axis, labelling the peak', () => {
+    const svg = renderReportSvg(
+      report([row('2026-07-25', { anthropic: 9 })], {}, { timeOfDay: timeOfDay({ 9: 6, 22: 3 }) }),
+      OPTIONS,
+    );
+
+    const hours = panel(svg, 'time-of-day');
+    expect(svg).toContain('Cost by hour of day (UTC)');
+    // The axis is a clock, not the figure's date axis — which the period panels
+    // still carry, so this has to be asserted inside this panel alone.
+    expect(hours).toContain('>09:00<');
+    expect(hours).toContain('>21:00<');
+    expect(hours).not.toContain('2026-07-25');
+    // Two busy hours, so two bars — the other 22 slots stay empty.
+    expect(hours.match(/<rect/g)?.length).toBe(2);
+    // The peak is labelled directly rather than left to a ruler.
+    expect(hours).toContain('$6.00');
+  });
+
+  it('states which sources the hour panels cover, and what they leave out', () => {
+    const svg = renderReportSvg(
+      report(
+        [row('2026-07-25', { anthropic: 4 })],
+        {},
+        {
+          timeOfDay: timeOfDay(
+            { 9: 4 },
+            { coarseSources: ['openrouter', 'ccusage'], excludedCost: 6, excludedTokens: 5000 },
+          ),
+        },
+      ),
+      OPTIONS,
+    );
+
+    expect(svg).toContain('covers only the sources that reported sub-daily buckets');
+    expect(svg).toContain('$6.00 and 5,000 tokens from openrouter, ccusage');
+    expect(svg).toContain('excluded from the hour panels rather than spread across 24 hours');
+  });
+
+  it('separates the hours of the heatmap, so a quiet stretch is not one wide cell', () => {
+    const svg = renderReportSvg(
+      report([row('2026-07-25', { anthropic: 9 })], {}, { timeOfDay: timeOfDay({ 9: 6, 22: 3 }) }),
+      OPTIONS,
+    );
+    // Seven separators at the three-hourly marks, plus one hairline row per
+    // weekday, so an empty run of hours still reads as several hours.
+    expect(panel(svg, 'week-hours').match(/<line/g)?.length).toBe(7);
+    expect(panel(svg, 'week-hours').match(/<rect[^>]*fill="none"/g)?.length).toBe(7);
+  });
+
+  it('says the heatmap’s colour is a rank, so it cannot be read as a magnitude', () => {
+    const svg = renderReportSvg(
+      report([row('2026-07-25', { anthropic: 9 })], {}, { timeOfDay: timeOfDay({ 9: 6, 22: 3 }) }),
+      OPTIONS,
+    );
+    expect(svg).toContain('data-panel="week-hours"');
+    expect(svg).toContain('rank among the busy cells, not its magnitude');
+    expect(svg).toContain('>Mon<');
+    expect(svg).toContain('>Sun<');
+  });
+});
+
+describe('project and concentration statistics', () => {
+  function withWorkspaces(rows: DimensionBreakdown[]): ReportRow {
+    return { ...row('2026-07-25', { anthropic: 4 }), workspaceBreakdowns: rows };
+  }
+
+  it('ranks platform workspaces, and keeps unattributed usage as its own row', () => {
+    const svg = renderReportSvg(
+      report([
+        withWorkspaces([
+          { ...breakdown('anthropic', 3), id: 'ws_1', name: 'Platform' },
+          { ...breakdown('anthropic', 1), id: '(unattributed)', name: '(no workspace reported)' },
+        ]),
+      ]),
+      OPTIONS,
+    );
+
+    expect(svg).toContain('data-panel="workspace-rank"');
+    expect(svg).toContain('Platform');
+    expect(svg).toContain('(no workspace reported)');
+    expect(svg).toContain('A &quot;project&quot; here is a platform workspace');
+    expect(svg).toContain('keeps its own row in that panel');
+  });
+
+  it('draws no project panel when no platform ever named a workspace', () => {
+    const svg = renderReportSvg(
+      report([
+        withWorkspaces([
+          { ...breakdown('ccusage', 4), id: '(unattributed)', name: '(no workspace reported)' },
+        ]),
+      ]),
+      OPTIONS,
+    );
+    // One bar saying "no workspace reported" answers nothing.
+    expect(svg).not.toContain('data-panel="workspace-rank"');
+  });
+
+  it('states concentration in the caption in periods, not as a bare ratio', () => {
+    const svg = renderReportSvg(
+      report(
+        [row('2026-07-24', { anthropic: 9 }), row('2026-07-25', { anthropic: 1 })],
+        {},
+        {
+          concentration: {
+            unit: 'daily',
+            measure: 'cost',
+            activePeriods: 2,
+            topShare: 0.9,
+            periodsForHalf: 1,
+            topDecileShare: 0.9,
+            topDecilePeriods: 1,
+          },
+        },
+      ),
+      OPTIONS,
+    );
+
+    expect(svg).toContain('90% of spend fell in the single busiest day');
+    expect(svg).toContain('half of it in 1 of 2 active days');
   });
 });

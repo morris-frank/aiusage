@@ -176,11 +176,19 @@ export function dimensionOf(
   }
 }
 
+/**
+ * The bucket key for usage a platform reported without naming the principal it
+ * belonged to. Exported because callers have to be able to *recognise* that row
+ * — it is the one row in a breakdown that is not a real thing — without matching
+ * a string literal that could drift away from this one.
+ */
+export const UNATTRIBUTED_KEY = '(unattributed)';
+
 function principalOf(
   principal: { id: string; name: string | null } | null,
   noun: string,
 ): { key: string; label: string } {
-  if (!principal) return { key: '(unattributed)', label: `(no ${noun} reported)` };
+  if (!principal) return { key: UNATTRIBUTED_KEY, label: `(no ${noun} reported)` };
   return { key: principal.id, label: principal.name ?? principal.id };
 }
 

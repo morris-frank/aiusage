@@ -21,11 +21,25 @@
  *
  * `daily --by-agent` is deliberately the only ccusage command this uses: it is
  * the one that buckets by the actual day tokens were used, not by a session's
- * own start/end. A `session`-based collection would also expose which project
- * a session ran in, but was measured (2026-07-27, ccusage 20.0.18) to move a
- * 27-day window's total by ~16% — a real accuracy cost for a project split
- * that, on this machine, only ever appears for a third-party agent and never
- * for Claude Code or Codex sessions. Not worth it: `daily`'s exact totals win.
+ * own start/end. Two alternatives were measured and rejected (2026-08-04,
+ * ccusage 20.x), against `daily --by-agent` over the same 30-day window:
+ *
+ *   - `session` returns 9.8% less than `daily` (1855.10 against 2057.26 USD),
+ *     because a session straddling `--since` is dropped or counted whole rather
+ *     than clipped to the window. Its rows carry a session id, tokens, cost and
+ *     `metadata.lastActivity` — but **no start time**, so no duration can be
+ *     derived from it. (A Codex session id happens to embed a start timestamp
+ *     and a Claude one does not; parsing an undocumented id into a timestamp is
+ *     exactly what rule 3 forbids.) It also carries no project or cwd.
+ *   - `blocks` decomposes the *Claude Code* total almost exactly — 1371.50 USD
+ *     against `daily`'s claude-only 1371.73 — and with `-n 1` gives clean
+ *     hour-aligned buckets, which is the one sub-daily local grain that exists.
+ *     But it is Claude-Code-only: Codex (636.71) and pi (48.83) are silently
+ *     absent, a third of this machine's spend. Using it as "local hourly usage"
+ *     would report that third as zero, which rule 1 forbids outright.
+ *
+ * So local usage is whole local days, `capabilities.hourly` is false, and the
+ * time-of-day statistics exclude it and say so rather than inventing a shape.
  */
 
 import { execFile } from 'node:child_process';
@@ -93,6 +107,9 @@ const DECLARED: ProviderCapabilities = {
   splitByAccount: false,
   splitByWorkspace: false,
   livePricing: false,
+  // `daily` rows are whole local days; see the module comment for why `blocks`
+  // is not used to sharpen that.
+  hourly: false,
   maxLookbackDays: null,
 };
 

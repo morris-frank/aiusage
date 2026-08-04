@@ -95,6 +95,10 @@ const DECLARED: ProviderCapabilities = {
   splitByAccount: true,
   splitByWorkspace: true,
   livePricing: true,
+  // `/activity` returns one row per UTC *day* and takes no bucket-width
+  // parameter (checked against the reference 2026-08-04), so OpenRouter usage
+  // cannot be placed inside a day at all — not even when asked.
+  hourly: false,
   maxLookbackDays: OPENROUTER_LOOKBACK_DAYS,
 };
 

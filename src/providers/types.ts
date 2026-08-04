@@ -7,6 +7,15 @@ export type CollectContext = {
   range: DateRange;
   /** Timezone the caller will group rows in; drives bucket-width choice. */
   timeZone: string;
+  /**
+   * Ask for sub-daily buckets wherever the platform has them, so time-of-day
+   * statistics have something to stand on. Off by default because it is not
+   * free: an hourly window is 24× the buckets and several times the pages of
+   * the same window in days, for a shape the daily/weekly/monthly commands
+   * never draw. A platform without hourly buckets ignores this and says so via
+   * `ProviderCapabilities.hourly`.
+   */
+  hourlyBuckets: boolean;
   /** Max in-flight requests this provider may use. */
   concurrency: number;
   /** Injected clock, so runs are reproducible in tests. */

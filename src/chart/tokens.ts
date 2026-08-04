@@ -65,6 +65,17 @@ export const TOKEN_CLASSES = [
 
 export type TokenClassKey = (typeof TOKEN_CLASSES)[number]['key'];
 
+/**
+ * The sequential ramp for a magnitude encoding — a heatmap cell — lightest to
+ * darkest. Derived from the same ordered green ramp `TOKEN_CLASSES` uses, with
+ * the system's own `accent-soft` as the lightest step, so a change to the ramp
+ * carries here instead of a second set of greens drifting away from the first.
+ */
+export const SEQUENTIAL_RAMP = [
+  TOKEN.accentSoft,
+  ...[...TOKEN_CLASSES].reverse().map((klass) => klass.colour),
+] as const;
+
 export type VendorId = 'anthropic' | 'openai' | 'google' | 'route' | 'local' | 'other';
 
 export function vendorColour(vendor: VendorId): string {

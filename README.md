@@ -35,6 +35,7 @@ for your own credentials.
 | Split by agent | — | — | — | yes |
 | Cache tokens reported | no | read + write | read + 5m/1h write | read + write |
 | Request counts | yes | yes | no | no |
+| Sub-daily (hourly) buckets | no | yes | yes | no |
 | Lookback | 30 days | unlimited | unlimited | as far as the logs go |
 | Live unit prices | `/api/v1/models` | LiteLLM table | LiteLLM table | ccusage's own |
 
@@ -165,6 +166,23 @@ already parsing ccusage output keeps working:
   "totals": { "cacheCreationTokens": 1500, "cacheReadTokens": 200, "inputTokens": 1500,
               "outputTokens": 500, "totalCost": 2.5, "totalTokens": 3700,
               "requests": null, "costSource": "allocated" },
+
+  // aiusage addition: derived shape, never a total. Each part is null when the
+  // collected grain cannot support it — see "Derived statistics" below.
+  "statistics": {
+    "timeOfDay": {
+      "hours": [ /* 24 entries: { hour, cost, tokens, requests, activeDays } */ ],
+      "week": [ /* only busy cells: { weekday (1=Mon), hour, cost, tokens } */ ],
+      "sources": ["anthropic"],        // sources that reported sub-daily buckets
+      "coarseSources": ["openrouter"], // whole-day sources, excluded from the above
+      "excludedTokens": 48000, "excludedCost": 27.0,
+      "peakHour": 9, "measure": "cost"
+    },
+    "concentration": { "unit": "daily", "measure": "cost", "activePeriods": 27,
+                       "topShare": 0.19, "periodsForHalf": 5,
+                       "topDecileShare": 0.36, "topDecilePeriods": 3 },
+    "diagnostics": [ /* also folded into meta.notices */ ]
+  },
   "meta": {
     "tool": "aiusage", "version": "0.1.0", "generatedAt": "…",
     "granularity": "daily", "range": { "since": "…", "until": "…" }, "timezone": "UTC",
@@ -194,7 +212,7 @@ aiusage report                  the report figure: 90-day window, --local implie
 
 `-j/--json` · `-s/--since <date>` · `-u/--until <date>` · `--days <n>` · `-z/--timezone <tz>`
 · `-p/--provider <list>` · `--split <model,apiKey,account,workspace,provider,agent>` ·
-`-b/--breakdown` · `--local` · `-O/--offline` · `--no-cost` · `--compact` ·
+`-b/--breakdown` · `--local` · `--hourly` · `-O/--offline` · `--no-cost` · `--compact` ·
 `--color/--no-color`. `report` also takes `--out <file>`, `--format svg|html`, `--print` and
 `--granularity daily|weekly|monthly`.
 
@@ -216,6 +234,41 @@ Exit codes: `0` success, `1` a platform failed (its rows are missing and a notic
 OpenAI and Anthropic are queried in *hourly* buckets so a local day is grouped correctly;
 OpenRouter only reports whole UTC days and emits a `timezone-approximation` warning.
 
+**`--hourly`.** Asks OpenAI and Anthropic for hourly buckets whatever the timezone, which is
+what the time-of-day statistics need. It costs roughly 24× the buckets and several times the
+pages of the same window in days, so only `report` turns it on by default; `--no-hourly` opts
+back out, and any other command can opt in. OpenRouter and ccusage report whole days no
+matter what is asked, and say so in `capabilities.hourly`.
+
+## Derived statistics
+
+`statistics` in the JSON, and two panels plus two summary cards in the report, answer
+questions the time series cannot. Both are *shape*, never a total, and both are null when the
+collected grain cannot support them.
+
+**Time of day** — the window's cost (or tokens) summed by hour of your clock, plus the
+weekday × hour grid behind it. Built **only from sources that reported sub-daily buckets**. A
+whole-day bucket says nothing about when inside the day its tokens were spent, so it is
+excluded rather than spread across 24 hours: `excludedTokens` / `excludedCost` state how much,
+`coarseSources` names which sources, and a `time-of-day-partial` warning says it out loud.
+**These panels are therefore smaller than the report's own totals whenever a whole-day source
+is in the run** — by design. With no hourly source at all the statistic is `null` and a
+`time-of-day-unavailable` notice gives the reason.
+
+In the weekday × hour heatmap, colour is a cell's **rank** among the busy cells, not its
+magnitude: hourly spend is heavy-tailed enough that linear bins put nearly every cell in the
+lightest step. Read it for pattern and the hour panel above it for size.
+
+**Concentration** — whether the window is spiky or steady: the share of the measure in its
+single busiest period, the fewest periods that together reach half of it, and the share in its
+busiest tenth (rounded up to at least one period, with `topDecilePeriods` saying how many).
+Computed from the same period rows the figure draws, so every source is included.
+
+**Projects** are platform workspaces — an OpenAI project, an Anthropic or OpenRouter
+workspace. Usage whose platform reported no workspace keeps its own row rather than being
+dropped or folded into a named one. No source collected here reports the *repository* an agent
+ran in, so none is shown.
+
 ## The report figure
 
 `aiusage report` draws the same numbers as stacked panels on one shared time axis:
@@ -229,7 +282,12 @@ OpenRouter only reports whole UTC days and emits a `timezone-approximation` warn
    rather than a per-model hue; the tail beyond the top few folds into a disclosed
    "Other N models" row, and a model billed under more than one provider gets the neutral
    mark instead of either provider's colour;
-5. **token mix**, the share of each period that was uncached input, output, cache write and
+5. **projects and workspaces**, ranked the same way, with unattributed usage kept as its own
+   disclosed row — drawn only when a platform actually named a workspace;
+6. **cost by hour of day** on a clock axis, with the busiest hour labelled directly, and
+   **weekday × hour** as a heatmap: see [Derived statistics](#derived-statistics) for which
+   sources these cover and what they leave out;
+7. **token mix**, the share of each period that was uncached input, output, cache write and
    cache read, so a change in caching shows up on its own axis.
 
 With `--no-cost` the two cost panels are dropped, and the token panels
@@ -311,6 +369,21 @@ npm pack --dry-run
   to another surface's spelling. Two distinct dated snapshots of a model you wanted to tell
   apart will read as the same row; `model-id-canonicalized` says when a merge happened, not
   which snapshot won.
+- The time-of-day statistics never cover OpenRouter or local agent usage, because neither
+  reports a bucket finer than a day. On a run that includes either, those panels total less
+  than the report does; the excluded figures are stated beside them, but the two numbers are
+  not meant to reconcile.
+- No session, per-request or per-prompt statistics exist here, and none can from these
+  sources. No billing API has a session concept or a per-request row; `ccusage session`
+  reports a session id, its tokens and its cost, but no start time, so **session duration is
+  not obtainable** — `ccusage blocks` gives fixed-width billing windows, not sessions, and
+  measured 2026-08-04 it covers Claude Code alone (1371.50 USD against `daily --by-agent`'s
+  2057.26 over the same 30 days, with Codex and other agents absent). Likewise **no source
+  reports a request's context size**: Anthropic reports only which *pricing tier*
+  (`0-200k` / `200k-1M`) a bucket fell in, which is in `tags.contextWindow`, not a maximum.
+  Any of these would mean parsing the agents' own transcripts, which this tool does not do.
+- "Project" means a platform workspace, never a repository or directory. No collected source
+  reports the working directory an agent ran in.
 
 ## Licence
 

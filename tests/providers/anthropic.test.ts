@@ -42,9 +42,16 @@ const NAME_ROUTES: StubRoute[] = [
   },
 ];
 
-function context(routes: StubRoute[], timeZone = 'UTC') {
+function context(routes: StubRoute[], timeZone = 'UTC', hourlyBuckets = false) {
   const { http, fetch } = stubClient(routes);
-  const ctx: CollectContext = { http, range: RANGE, timeZone, concurrency: 2, now: NOW };
+  const ctx: CollectContext = {
+    http,
+    range: RANGE,
+    timeZone,
+    hourlyBuckets,
+    concurrency: 2,
+    now: NOW,
+  };
   return { ctx, fetch };
 }
 
@@ -209,5 +216,29 @@ describe('Anthropic provider', () => {
     expect(fetch.calls[0]).toContain('bucket_width=1h');
     // The cost report only supports daily buckets, whatever the timezone.
     expect(fetch.calls.find((url) => url.includes('cost_report'))).toContain('bucket_width=1d');
+  });
+
+  it('asks for hourly buckets in UTC too when the caller wants time-of-day detail', async () => {
+    const routes: StubRoute[] = [
+      { when: '/usage_report/messages', body: { data: [], has_more: false } },
+      ...NAME_ROUTES,
+      { when: '/cost_report', body: { data: [], has_more: false } },
+    ];
+
+    const plain = context(routes, 'UTC', false);
+    const plainResult = await createAnthropicProvider({ adminKey: 'sk-ant-admin01-x' }).collect(
+      plain.ctx,
+    );
+    expect(plain.fetch.calls[0]).toContain('bucket_width=1d');
+    // The capability describes the run, not the platform's brochure: the same
+    // key could have answered hourly, and this run did not ask.
+    expect(plainResult.capabilities.hourly).toBe(false);
+
+    const asked = context(routes, 'UTC', true);
+    const askedResult = await createAnthropicProvider({ adminKey: 'sk-ant-admin01-x' }).collect(
+      asked.ctx,
+    );
+    expect(asked.fetch.calls[0]).toContain('bucket_width=1h');
+    expect(askedResult.capabilities.hourly).toBe(true);
   });
 });

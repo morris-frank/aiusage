@@ -49,7 +49,14 @@ function probeRoute(management: boolean, label = 'sk-or-v1-abc...xyz'): StubRout
 
 function context(routes: StubRoute[], range = { since: '2026-07-01', until: '2026-07-26' }) {
   const { http, fetch } = stubClient(routes);
-  const ctx: CollectContext = { http, range, timeZone: 'UTC', concurrency: 2, now: NOW };
+  const ctx: CollectContext = {
+    http,
+    range,
+    timeZone: 'UTC',
+    hourlyBuckets: false,
+    concurrency: 2,
+    now: NOW,
+  };
   return { ctx, fetch };
 }
 
@@ -195,6 +202,7 @@ describe('OpenRouter provider', () => {
       http,
       range: { since: '2026-07-01', until: '2026-07-26' },
       timeZone: 'UTC',
+      hourlyBuckets: false,
       concurrency: 2,
       now: NOW,
     });
@@ -264,6 +272,7 @@ describe('OpenRouter provider', () => {
       http,
       range: { since: '2026-07-01', until: '2026-07-26' },
       timeZone: 'Europe/Berlin',
+      hourlyBuckets: false,
       concurrency: 2,
       now: NOW,
     });
@@ -305,5 +314,18 @@ describe('OpenRouter provider', () => {
     expect(result.status).toBe('partial');
     expect(result.diagnostics.map((d) => d.code)).toContain('keys-unavailable');
     expect(result.records).toHaveLength(1);
+  });
+
+  it('never claims hourly buckets, and asking for them changes no request', async () => {
+    const { ctx, fetch } = context([probeRoute(false), { when: '/activity', body: { data: [] } }]);
+    const result = await createOpenRouterProvider({ keys: [inferenceKey()] }).collect({
+      ...ctx,
+      hourlyBuckets: true,
+    });
+
+    // `/activity` has no bucket-width parameter, so asking changes nothing —
+    // and the capability must say so rather than inherit a declared `true`.
+    expect(result.capabilities.hourly).toBe(false);
+    expect(fetch.calls.some((url) => url.includes('bucket_width'))).toBe(false);
   });
 });

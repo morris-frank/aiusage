@@ -278,8 +278,8 @@ const PRICE_BOOK = (() => {
   });
 })();
 
-async function pipeline(local?: { runner: CommandRunner }) {
-  const { http } = stubClient(ROUTES);
+async function pipeline(local?: { runner: CommandRunner }, routes: StubRoute[] = ROUTES) {
+  const { http } = stubClient(routes);
   const collection = await collectUsage({
     config: CONFIG,
     range: RANGE,
@@ -519,5 +519,57 @@ describe('the whole pipeline over every source', () => {
       'claude',
       2_000_000,
     ]);
+  });
+
+  it('builds a time-of-day statistic from the hourly sources and excludes the rest', async () => {
+    // The same run, but Anthropic answers in hourly buckets — 09:00 and 14:00 —
+    // while OpenAI and OpenRouter keep their whole-day rows.
+    const hourly = ROUTES.map((route) =>
+      route.when === 'api.anthropic.com/v1/organizations/usage_report/messages'
+        ? {
+            ...route,
+            body: {
+              data: (route.body as { data: { starting_at: string; ending_at: string }[] }).data.map(
+                (bucket, index) => ({
+                  ...bucket,
+                  starting_at: `2026-07-25T${index === 0 ? '09' : '14'}:00:00Z`,
+                  ending_at: `2026-07-25T${index === 0 ? '10' : '15'}:00:00Z`,
+                }),
+              ),
+            },
+            has_more: false,
+          }
+        : route,
+    );
+
+    const { collection, costing } = await pipeline(undefined, hourly);
+    const periods = aggregateByPeriod(costing.records, {
+      granularity: 'daily',
+      timeZone: 'UTC',
+      range: RANGE,
+      splits: ['model'],
+    });
+    const report = buildPeriodReport(periods, totalsOf(periods), collection, costing, {
+      granularity: 'daily',
+      range: RANGE,
+      timeZone: 'UTC',
+      splits: ['model'],
+      includeCost: true,
+      generatedAt: NOW,
+      priceSources: ['litellm@test'],
+    });
+
+    const timeOfDay = report.statistics.timeOfDay;
+    expect(timeOfDay?.sources).toEqual(['anthropic']);
+    expect(timeOfDay?.coarseSources).toEqual(['openai', 'openrouter']);
+    expect(timeOfDay?.hours[9]?.cost).toBeGreaterThan(0);
+    expect(timeOfDay?.hours[10]?.cost).toBeNull();
+
+    // The statistic's own hours must not add up to the report's total — that is
+    // the point of the warning, and of the excluded figures beside it.
+    const placed = (timeOfDay?.hours ?? []).reduce((sum, hour) => sum + (hour.cost ?? 0), 0);
+    expect(placed).toBeLessThan(report.totals.totalCost ?? 0);
+    expect(placed + (timeOfDay?.excludedCost ?? 0)).toBeCloseTo(report.totals.totalCost ?? 0, 6);
+    expect(report.meta.notices.map((notice) => notice.code)).toContain('time-of-day-partial');
   });
 });

@@ -59,6 +59,7 @@ export function providerResult(
       splitByAccount: true,
       splitByWorkspace: true,
       livePricing: false,
+      hourly: false,
       maxLookbackDays: null,
     },
     records,
