@@ -120,7 +120,6 @@ CREDENTIALS (environment; a platform without them is skipped, not zeroed)
     OPENROUTER_MANAGEMENT_KEY_<LABEL> (one key per workspace) or a comma list
   OPENAI_ADMIN_KEY, OPENAI_ORG_ID                 OpenAI Platform (admin key)
   ANTHROPIC_ADMIN_KEY                             Claude Platform (admin key)
-  TOGETHER_API_KEY                                Together AI (pricing + identity only)
 
 OTHER ENVIRONMENT
   AIUSAGE_REPORT_DIR   directory the report figure is saved to (default: the

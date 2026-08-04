@@ -12,14 +12,13 @@
  * Nothing in this package silently promotes a derived number to a reported one.
  */
 
-export const PROVIDER_IDS = ['openrouter', 'together', 'openai', 'anthropic', 'ccusage'] as const;
+export const PROVIDER_IDS = ['openrouter', 'openai', 'anthropic', 'ccusage'] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 /** Human-facing labels; also the `--provider` aliases accepted on the CLI. */
 export const PROVIDER_LABELS: Record<ProviderId, string> = {
   openrouter: 'OpenRouter',
-  together: 'Together AI',
   openai: 'OpenAI Platform',
   anthropic: 'Claude Platform',
   ccusage: 'Local agents (ccusage)',
@@ -186,7 +185,12 @@ export type ProviderStatus =
   | 'partial'
   /** No credentials configured — the provider was not contacted. */
   | 'skipped'
-  /** Credentials present, but the platform exposes no usage API to call. */
+  /**
+   * Credentials present, but the platform exposes no usage API to call. No
+   * shipped source emits this today; it stays in the vocabulary because it is
+   * part of the JSON contract and is what a future usage-less platform must
+   * report rather than zero.
+   */
   | 'unsupported'
   /** The platform was contacted and refused or failed. */
   | 'error';

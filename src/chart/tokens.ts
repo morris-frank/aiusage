@@ -47,7 +47,7 @@ export const SERIES_COLOURS = [
   '#AB68FF', // OpenAI GPT-4
   '#F9C322', // OpenAI O1
   '#C8FF00', // OpenRouter
-  '#000000', // OpenAI / Together
+  '#000000', // black (no vendor claim; a spare categorical slot)
   '#4A4A44', // charcoal (neutral role)
 ] as const;
 
@@ -65,7 +65,7 @@ export const TOKEN_CLASSES = [
 
 export type TokenClassKey = (typeof TOKEN_CLASSES)[number]['key'];
 
-export type VendorId = 'anthropic' | 'openai' | 'google' | 'route' | 'together' | 'local' | 'other';
+export type VendorId = 'anthropic' | 'openai' | 'google' | 'route' | 'local' | 'other';
 
 export function vendorColour(vendor: VendorId): string {
   switch (vendor) {
@@ -77,8 +77,6 @@ export function vendorColour(vendor: VendorId): string {
       return '#3186FF';
     case 'route':
       return '#8CA800'; // Darkened #C8FF00 for contrast on white
-    case 'together':
-      return '#000000';
     case 'local':
       return '#4A4A44';
     case 'other':
@@ -101,7 +99,6 @@ export function vendorOf(name: string): VendorId {
   if (/(^|[/\s[])(openai|gpt-|codex|o[134]-)/.test(key)) return 'openai';
   if (/(^|[/\s[])(google|gemini|vertex)/.test(key)) return 'google';
   if (/openrouter|router/.test(key)) return 'route';
-  if (/together/.test(key)) return 'together';
   if (/ccusage|local/.test(key)) return 'local';
   return 'other';
 }
@@ -138,12 +135,6 @@ export function vendorMark(
       </g>`;
     case 'route':
       return `<g transform="translate(${round(x)}, ${round(y)}) scale(${s / 24})"><path d="M18.654 3.87a5.087 5.087 0 110 10.174L23.7 19.09c.64.641.187 1.737-.72 1.737H8.48a8.479 8.479 0 010-16.958h10.175zM8.479 7.26a5.087 5.087 0 100 10.176 5.087 5.087 0 000-10.175z" fill="${colour}"/></g>`;
-    case 'together':
-      return `<g transform="translate(${round(x)}, ${round(y)}) scale(${s / 24})">
-        <path d="M23.197 4.503A6 6 0 0015 2.307a5.973 5.973 0 00-2.995 4.933l5.996.008v.515h-5.996c.039.937.298 1.87.8 2.74a6 6 0 1010.39-6z" fill="${colour}"/>
-        <path d="M.805 4.5A6 6 0 003 12.697a5.972 5.972 0 005.77.127L5.779 7.627l.446-.257 2.997 5.192A6 6 0 10.804 4.5z" fill="${colour}"/>
-        <path d="M12 23.894a6 6 0 005.999-6c0-2.13-1.1-3.996-2.775-5.06l-3.005 5.189-.444-.258 2.997-5.192A6 6 0 1012 23.894z" fill="${colour}"/>
-      </g>`;
     case 'local':
       // A terminal prompt: this source is a program on this machine.
       return `<rect x="${round(x + 0.75)}" y="${round(y + s * 0.12)}" width="${round(s - 1.5)}" height="${round(s * 0.76)}" rx="2" ${stroke}/><path d="M${x + s * 0.3} ${y + s * 0.38}L${x + s * 0.48} ${cy}L${x + s * 0.3} ${y + s * 0.62}" ${stroke}/>`;

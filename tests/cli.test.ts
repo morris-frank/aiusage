@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type CliEnvironment, run } from '../src/cli.js';
+import { PROVIDER_IDS } from '../src/types.js';
 
 /**
  * The CLI is driven end to end with no credentials and `--offline`, so nothing
@@ -170,7 +171,6 @@ describe('no credentials configured', () => {
       ]),
     ).toEqual([
       ['openrouter', 'skipped'],
-      ['together', 'skipped'],
       ['openai', 'skipped'],
       ['anthropic', 'skipped'],
       ['ccusage', 'skipped'],
@@ -187,7 +187,7 @@ describe('no credentials configured', () => {
     const text = out.join('\n');
     expect(text).toContain('No usage found between 2026-06-27 and 2026-07-26');
     expect(text).toContain('OpenRouter');
-    expect(text).toContain('Together AI');
+    expect(text).toContain('Claude Platform');
   });
 });
 
@@ -283,7 +283,7 @@ describe('commands', () => {
     const json = await environment(['providers', '--json', ...offline]);
     expect(await run(json.cli)).toBe(0);
     const report = JSON.parse(json.out.join('\n'));
-    expect(report.providers).toHaveLength(5);
+    expect(report.providers).toHaveLength(PROVIDER_IDS.length);
 
     const table = await environment(['providers', ...offline]);
     await run(table.cli);
