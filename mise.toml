@@ -69,7 +69,9 @@ description = "Run the test suite once"
 run = "pnpm run test"
 
 [tasks.check]
-description = "Everything CI runs — the definition of done"
+# CI reaches the same gates through the prek hooks, and adds build, secrets and
+# audit on top — this is the local definition of done, not a copy of the workflow.
+description = "The full local gate — the definition of done"
 depends = ["lint", "fmt:check", "typecheck", "test"]
 
 [tasks.hooks]

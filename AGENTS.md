@@ -99,15 +99,32 @@ tests/              vitest; fixtures inline, HTTP stubbed, integration.test.ts s
 
 ```bash
 mise run setup     # cold start: toolchain, frozen deps, git hooks, verify
-mise run check     # lint + format-check + typecheck + tests (what CI runs)
+mise run check     # lint + format-check + typecheck + tests — the local gate
 mise run test      # tests only; also the pre-push hook
 mise run build     # tsc → dist/
 mise run audit     # osv-scanner against pnpm-lock.yaml
 mise run secrets   # gitleaks over the working tree (.gitleaks.toml scopes it)
+mise run report    # render the figure into AIUSAGE_REPORT_DIR (the scheduled job)
 ```
+
+CI reaches the same gates through the prek hooks — one definition of the checks, run
+per-file at commit, tests-only at push, whole-repo in the workflow — and adds `build`,
+`secrets` and `audit` on top.
 
 Dependencies via `pnpm add`; never hand-edit `pnpm-lock.yaml`. Tool versions live in
 `mise.toml` and nowhere else.
+
+## Publishing
+
+This is a published npm package, so **no path, host or account from one machine may reach
+the code**. Anything machine-specific is an environment variable with a documented default
+that works anywhere (`AIUSAGE_REPORT_DIR` defaults to the working directory) — a personal
+path baked into a default is a bug, not a convenience.
+
+The tarball is `dist/` plus `src/`: the sources ship so the emitted source maps and
+declaration maps resolve. `npm pack --dry-run` before believing otherwise. Releases run
+from [`.github/workflows/release.yml`](.github/workflows/release.yml) on a published
+GitHub release tagged `v<version>`; it re-runs CI's gate and publishes with provenance.
 
 ## Definition of done
 
@@ -118,5 +135,6 @@ Dependencies via `pnpm add`; never hand-edit `pnpm-lock.yaml`. Tool versions liv
 - Any new cost or token path carries a provenance label and is reflected in
   `ProviderCapabilities`.
 - README's capability matrix and `.env.example` match what the code actually does.
+- No machine-specific path, host or account appears outside a gitignored `.env`.
 - Assumptions that could not be verified are marked `UNRESOLVED` in the code and listed
   under "Known limits" in the README.

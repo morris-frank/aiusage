@@ -19,5 +19,10 @@ coverage/
 # aiusage's own on-disk pricing cache (see src/pricing/cache.ts)
 .aiusage-cache/
 
+# Report figures. `aiusage report` writes here when AIUSAGE_REPORT_DIR is unset,
+# so running the tool on its own repo must not dirty the tree.
+*-aiusage-report-*.html
+*-aiusage-report-*.svg
+
 # macOS
 .DS_Store
