@@ -41,6 +41,13 @@ run = [
 description = "Compile TypeScript to dist/"
 run = "pnpm run build"
 
+[tasks.report]
+description = "Render the report figure into AIUSAGE_REPORT_DIR (used by the daily job)"
+# Rebuilds first: the scheduled run is unattended, and a dist/ left behind by an
+# older checkout would report yesterday's code against today's numbers.
+depends = ["build"]
+run = "node dist/bin.js report"
+
 [tasks.lint]
 description = "Lint (Biome, no writes)"
 run = "pnpm run lint"

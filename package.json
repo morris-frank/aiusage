@@ -19,6 +19,10 @@
     "type": "git",
     "url": "git+https://github.com/morris-frank/aiusage.git"
   },
+  "homepage": "https://github.com/morris-frank/aiusage#readme",
+  "bugs": {
+    "url": "https://github.com/morris-frank/aiusage/issues"
+  },
   "type": "module",
   "bin": {
     "aiusage": "dist/bin.js"
@@ -27,11 +31,16 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20.11"
   },
@@ -44,7 +53,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepack": "pnpm run build"
+    "prepack": "pnpm run build",
+    "prepublishOnly": "pnpm run lint && pnpm run fmt:check && pnpm run typecheck && pnpm run test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.5",

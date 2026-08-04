@@ -1,5 +1,5 @@
 import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { type CliEnvironment, run } from '../src/cli.js';
@@ -25,7 +25,7 @@ async function environment(
     stderr: (text) => err.push(text),
     now: new Date('2026-07-26T12:00:00Z'),
     isTty: false,
-    homeDir: '/home/tester',
+    cwd: '/home/tester/work',
     writeFile: (path, content) => written.push({ path, content }),
     ...overrides,
   };
@@ -488,10 +488,22 @@ describe('the local source and the figure', () => {
     expect(out).toHaveLength(0);
     expect(written).toHaveLength(1);
     expect(written[0]?.path).toBe(
-      `/home/tester/code/morris-frank/vault/sources/2026-07-26-aiusage-report-2026-04-28-to-2026-07-26.html`,
+      `/home/tester/work/2026-07-26-aiusage-report-2026-04-28-to-2026-07-26.html`,
     );
     expect(written[0]?.content.startsWith('<!doctype html>')).toBe(true);
-    expect(err.join('\n')).toContain('Wrote /home/tester/code/morris-frank/vault/sources/');
+    expect(err.join('\n')).toContain('Wrote /home/tester/work/');
+  });
+
+  it('saves into AIUSAGE_REPORT_DIR when it is set, expanding a leading ~/', async () => {
+    const { cli, written } = await environment(
+      ['report', ...offline],
+      { AIUSAGE_REPORT_DIR: '~/reports/ai' },
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    expect(await run(cli)).toBe(0);
+    expect(written[0]?.path).toBe(
+      join(homedir(), 'reports/ai/2026-07-26-aiusage-report-2026-04-28-to-2026-07-26.html'),
+    );
   });
 
   it('--no-local drops local fusion for report even though it is the default', async () => {
@@ -534,7 +546,7 @@ describe('the local source and the figure', () => {
     expect(written[0]?.path).toBe('figure.svg');
   });
 
-  it('--json with --local still goes to stdout, not the ~/Downloads default', async () => {
+  it('--json with --local still goes to stdout, not the default report file', async () => {
     const { cli, out, written } = await environment(
       ['report', '--local', '--json', ...offline],
       {},

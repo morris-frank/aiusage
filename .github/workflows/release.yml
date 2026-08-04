@@ -1,0 +1,50 @@
+name: Release
+
+# Publishing is driven by a GitHub release, so the tag, the changelog and the
+# npm version are one act rather than three that can drift. The version itself
+# comes from package.json — this workflow refuses to publish if the tag and the
+# manifest disagree, because a mismatched tag is a release nobody can find.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - run: pnpm install --frozen-lockfile
+
+      # The same gate as CI: nothing reaches the registry that main would reject.
+      - run: mise run check
+
+      - name: Tag must match package.json version
+        if: github.event_name == 'release'
+        run: |
+          manifest="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$manifest" != "$tag" ]; then
+            echo "package.json is $manifest but the tag is $tag" >&2
+            exit 1
+          fi
+
+      # mise supplies node, so nothing has written a registry .npmrc for us.
+      - name: Authenticate to npm
+        run: |
+          echo "//registry.npmjs.org/:_authToken=\${NPM_TOKEN}" > "$HOME/.npmrc"
+
+      # `prepack` builds dist/; --provenance attests that this tarball came from
+      # this commit in this workflow.
+      - run: npm publish --provenance --access public
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

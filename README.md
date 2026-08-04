@@ -83,6 +83,7 @@ without credentials is **skipped and said so**, never reported as zero usage.
 | `ANTHROPIC_ADMIN_KEY` | Claude | Admin API key (`sk-ant-admin…`) or org OAuth token. |
 | `TOGETHER_API_KEY` | Together | Identity and pricing only. |
 | `AIUSAGE_CCUSAGE_CMD` | Local | How to run ccusage for `--local`; discovered otherwise. |
+| `AIUSAGE_REPORT_DIR` | — | Where `report` saves its figure; the working directory otherwise. |
 
 OpenAI and Anthropic remain one credential each: their admin keys are org-scoped, and
 multi-org reporting is not implemented.
@@ -199,9 +200,11 @@ aiusage report                  the report figure — 90-day window, --local imp
 `--granularity daily|weekly|monthly`.
 
 `report` fuses local agent usage by default — it's usually a person looking at their own
-machine's whole picture — and defaults to writing an HTML file to `~/Downloads` (named after
-the report's date range) rather than stdout. `--no-local` drops the local fusion; `--print`
-opts back out to stdout; an explicit `--out` always wins; `--json` is unaffected either way.
+machine's whole picture — and defaults to writing an HTML file rather than stdout, named
+`<today>-aiusage-report-<since>-to-<until>.html` in `$AIUSAGE_REPORT_DIR` (the working
+directory when that is unset; a leading `~/` is expanded). Missing directories are created.
+`--no-local` drops the local fusion; `--print` opts back out to stdout; an explicit `--out`
+always wins; `--json` is unaffected either way.
 
 Dates accept `YYYY-MM-DD` or `YYYYMMDD`. The default window is the trailing 30 days —
 OpenRouter's hard lookback limit, so the default is a window every platform can answer —
@@ -272,6 +275,21 @@ mise run check     # lint + format + typecheck + tests — the definition of don
 ```
 
 See [AGENTS.md](AGENTS.md) for the working agreement.
+
+### Releasing
+
+Publishing runs from CI, not a laptop: bump `version` in `package.json`, merge, then publish
+a GitHub release tagged `v<version>`. [`.github/workflows/release.yml`](.github/workflows/release.yml)
+re-runs the full check, refuses a tag that disagrees with the manifest, and publishes with
+[npm provenance](https://docs.npmjs.com/generating-provenance-statements). It needs one
+repository secret, `NPM_TOKEN` (an npm automation token with publish rights).
+
+The tarball is `dist/` plus `src/` — the sources ship so the emitted source maps and
+declaration maps resolve to something. To see exactly what a publish would send:
+
+```bash
+npm pack --dry-run
+```
 
 ## Known limits
 

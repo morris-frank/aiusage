@@ -82,6 +82,12 @@ export type RuntimeConfig = {
   credentials: Credentials;
   /** Where the pricing cache lives. */
   cacheDir: string;
+  /**
+   * Where `aiusage report` writes its figure when neither `--out` nor `--print`
+   * says otherwise, from `AIUSAGE_REPORT_DIR`. Null means "the working
+   * directory" — the caller supplies that, because config has no cwd of its own.
+   */
+  reportDir: string | null;
   timeoutMs: number;
   /** Max in-flight requests per provider. */
   concurrency: number;
@@ -117,6 +123,18 @@ function defaultCacheDir(env: NodeJS.ProcessEnv): string {
   if (explicit) return explicit;
   const xdg = trimmed(env.XDG_CACHE_HOME);
   return xdg ? join(xdg, 'aiusage') : join(homedir(), '.cache', 'aiusage');
+}
+
+/**
+ * `~` is expanded here rather than left to the shell: these variables are
+ * typically set in a dotenv file or a launchd/systemd unit, where nothing
+ * expands it and a literal `~` directory would be created instead.
+ */
+function directory(value: string | undefined): string | null {
+  const text = trimmed(value);
+  if (text === null) return null;
+  if (text === '~') return homedir();
+  return text.startsWith('~/') ? join(homedir(), text.slice(2)) : text;
 }
 
 /**
@@ -192,6 +210,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
   return {
     credentials,
     cacheDir: defaultCacheDir(env),
+    reportDir: directory(env.AIUSAGE_REPORT_DIR),
     timeoutMs: positiveInt(env.AIUSAGE_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 'AIUSAGE_TIMEOUT_MS'),
     concurrency: positiveInt(env.AIUSAGE_CONCURRENCY, DEFAULT_CONCURRENCY, 'AIUSAGE_CONCURRENCY'),
     secrets,

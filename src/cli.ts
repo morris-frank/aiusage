@@ -88,8 +88,9 @@ USAGE
   aiusage pricing [--model <id>]     unit prices, with their source
   aiusage report [--out <file>]      the report figure (SVG, or --format html);
                                       90-day default window, --local implied,
-                                      saved as HTML to ~/code/morris-frank/vault/sources unless
-                                      --print or --out says otherwise
+                                      saved as HTML to $AIUSAGE_REPORT_DIR (default:
+                                      the working directory) unless --print or
+                                      --out says otherwise
 
 OPTIONS
   -j, --json                 machine-readable output (ccusage-compatible shape)
@@ -105,7 +106,7 @@ OPTIONS
   -O, --offline              price from the cached tables only; never fetch
       --out <file>           write the figure to a file instead of stdout
       --format <svg|html>    figure format for the report command (default: svg,
-                              or html when --local saves to ~/code/morris-frank/vault/sources)
+                              or html when --local saves to a file)
       --print                print the report figure to stdout even with --local
       --granularity <g>      report grain: daily|weekly|monthly (default: daily)
       --no-cost              omit cost entirely (tokens only)
@@ -120,6 +121,10 @@ CREDENTIALS (environment; a platform without them is skipped, not zeroed)
   OPENAI_ADMIN_KEY, OPENAI_ORG_ID                 OpenAI Platform (admin key)
   ANTHROPIC_ADMIN_KEY                             Claude Platform (admin key)
   TOGETHER_API_KEY                                Together AI (pricing + identity only)
+
+OTHER ENVIRONMENT
+  AIUSAGE_REPORT_DIR   directory the report figure is saved to (default: the
+                       working directory); a leading ~/ is expanded
 
 EXIT CODES
   0 success · 1 a platform failed · 2 bad invocation`;
@@ -159,8 +164,8 @@ export type CliEnvironment = {
   stderr: (text: string) => void;
   now: Date;
   isTty: boolean;
-  /** The user's home directory, for `report --local`'s default ~/code/morris-frank/vault/sources path. */
-  homeDir: string;
+  /** Where a `report` figure lands when `AIUSAGE_REPORT_DIR` is unset. */
+  cwd: string;
   /** Injected so `cli.ts` stays free of side effects and stays testable. */
   writeFile?: (path: string, content: string) => void;
   /** Injected process runner for the local source; tests spawn nothing. */
@@ -237,7 +242,7 @@ export async function run(environment: CliEnvironment): Promise<number> {
     includeCost: options.includeCost,
   };
 
-  emit(environment, options, collection, costing, reportOptions, renderOptions, priceBook);
+  emit(environment, options, config, collection, costing, reportOptions, renderOptions, priceBook);
   return collection.results.some((result) => result.status === 'error') ? 1 : 0;
 }
 
@@ -264,6 +269,7 @@ function costOf(
 function emit(
   environment: CliEnvironment,
   options: ParsedOptions,
+  config: RuntimeConfig,
   collection: Awaited<ReturnType<typeof collectUsage>>,
   costing: CostingResult,
   reportOptions: ReportOptions,
@@ -312,7 +318,7 @@ function emit(
   const report = buildPeriodReport(periods, totalsOf(periods), collection, costing, reportOptions);
 
   if (options.command === 'report') {
-    emitFigure(environment, options, report);
+    emitFigure(environment, options, config, report);
     return;
   }
 
@@ -340,15 +346,16 @@ function emit(
  * The figure. `--json` still emits the report the figure was drawn from, so the
  * numbers behind a picture are always obtainable from the same invocation.
  *
- * `report --local` defaults to a file in `~/code/morris-frank/vault/sources` rather than stdout: a
- * one-off local run is usually a person looking at their own machine, not a
- * script consuming the output, and raw SVG dumped to a terminal is not
- * something anyone reads there. `--print` (or an explicit `--out`) opts back
- * out, and a plain `report` (no `--local`) is unaffected.
+ * `report --local` defaults to a file rather than stdout: a one-off local run is
+ * usually a person looking at their own machine, not a script consuming the
+ * output, and raw SVG dumped to a terminal is not something anyone reads there.
+ * `--print` (or an explicit `--out`) opts back out, and a plain `report` (no
+ * `--local`) is unaffected.
  */
 function emitFigure(
   environment: CliEnvironment,
   options: ParsedOptions,
+  config: RuntimeConfig,
   report: PeriodReport,
 ): void {
   const chartOptions = {
@@ -362,7 +369,8 @@ function emitFigure(
     : format === 'html'
       ? renderReportHtml(report, chartOptions)
       : renderReportSvg(report, chartOptions);
-  const out = options.out ?? (autoSave ? defaultReportPath(environment, options, format) : null);
+  const out =
+    options.out ?? (autoSave ? defaultReportPath(environment, config, options, format) : null);
 
   if (!out) {
     environment.stdout(content);
@@ -376,18 +384,20 @@ function emitFigure(
   environment.stderr(`Wrote ${out}`);
 }
 
+/**
+ * Named by the day it was produced *and* the window it covers: a scheduled run
+ * writes one file per day, and the run date is what a reader sorts by, while the
+ * window is what tells them whether two files are comparable.
+ */
 function defaultReportPath(
   environment: CliEnvironment,
+  config: RuntimeConfig,
   options: ParsedOptions,
   format: 'svg' | 'html',
 ): string {
   const today = toDateString(environment.now);
   return join(
-    environment.homeDir,
-    'code',
-    'morris-frank',
-    'vault',
-    'sources',
+    config.reportDir ?? environment.cwd,
     `${today}-aiusage-report-${options.range.since}-to-${options.range.until}.${format}`,
   );
 }

@@ -44,6 +44,7 @@ const CONFIG: RuntimeConfig = {
     anthropic: { adminKey: 'sk-ant-admin01-key' },
   },
   cacheDir: '/nonexistent',
+  reportDir: null,
   timeoutMs: 1000,
   concurrency: 4,
   secrets: ['sk-admin-key', 'sk-ant-admin01-key'],

@@ -1,6 +1,8 @@
 # Secrets — never committed. Documented in .env.example, auto-loaded by mise.
 .env
 .env.local
+# Per-machine mise overrides; may carry credentials in [env].
+mise.local.toml
 
 # Node
 node_modules/

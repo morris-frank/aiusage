@@ -4,8 +4,8 @@
  * from `cli.ts` so the test suite can drive the CLI without a process to exit.
  */
 
-import { writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { run } from './cli.js';
 
 run({
@@ -15,8 +15,12 @@ run({
   stderr: (text) => process.stderr.write(`${text}\n`),
   now: new Date(),
   isTty: process.stdout.isTTY === true,
-  homeDir: homedir(),
-  writeFile: (path, content) => writeFileSync(path, content, 'utf8'),
+  cwd: process.cwd(),
+  writeFile: (path, content) => {
+    // A scheduled run writes into a directory nobody created by hand.
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content, 'utf8');
+  },
 })
   .then((code) => {
     process.exitCode = code;
