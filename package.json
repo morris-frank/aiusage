@@ -1,6 +1,6 @@
 {
   "name": "@maurice-frank/aiusage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ccusage-shaped usage and cost reporting for remote LLM platform APIs (OpenRouter, OpenAI, Anthropic)",
   "keywords": [
     "llm",
