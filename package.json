@@ -1,5 +1,5 @@
 {
-  "name": "aiusage",
+  "name": "@maurice-frank/aiusage",
   "version": "0.1.0",
   "description": "ccusage-shaped usage and cost reporting for remote LLM platform APIs (OpenRouter, OpenAI, Anthropic)",
   "keywords": [
@@ -12,20 +12,17 @@
     "ccusage",
     "cli"
   ],
-  "license": "MIT",
-  "author": "Maurice Frank",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/morris-frank/aiusage.git"
-  },
   "homepage": "https://github.com/morris-frank/aiusage#readme",
   "bugs": {
     "url": "https://github.com/morris-frank/aiusage/issues"
   },
-  "type": "module",
-  "bin": {
-    "aiusage": "dist/bin.js"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/morris-frank/aiusage.git"
   },
+  "license": "MIT",
+  "author": "Maurice Frank",
+  "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -33,17 +30,17 @@
     },
     "./package.json": "./package.json"
   },
+  "main": "index.js",
+  "bin": {
+    "aiusage": "dist/bin.js"
+  },
+  "directories": {
+    "test": "tests"
+  },
   "files": [
     "dist",
     "src"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "engines": {
-    "node": ">=20.11"
-  },
-  "packageManager": "pnpm@11.15.0",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "biome lint .",
@@ -60,5 +57,12 @@
     "@types/node": "26.1.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
-  }
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "packageManager": "pnpm@11.15.0"
 }
