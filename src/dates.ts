@@ -87,6 +87,34 @@ export function monthKey(instant: string | Date, timeZone: string): string {
 }
 
 /**
+ * Hour of the day, 0–23, as read on a clock in `timeZone`.
+ *
+ * The wall-clock hour is the point: "when do we work" is a question about the
+ * reader's day, not about UTC. On the hour a DST forward jump skips, no bucket
+ * can exist to be labelled; on a repeated hour both repetitions carry the same
+ * label, which is what a clock would also say.
+ */
+export function zonedHour(instant: string | Date, timeZone: string): number {
+  const date = typeof instant === 'string' ? new Date(instant) : instant;
+  if (timeZone === 'UTC') return date.getUTCHours();
+  for (const part of offsetFormatter(timeZone).formatToParts(date)) {
+    // Some ICU builds render midnight as hour 24; both mean the same instant.
+    if (part.type === 'hour') return Number(part.value) % 24;
+  }
+  return date.getUTCHours();
+}
+
+/**
+ * ISO weekday of an instant as read in `timeZone`: 1 = Monday … 7 = Sunday.
+ * Derived from the local calendar day so it never disagrees with `dayKey`.
+ */
+export function zonedWeekday(instant: string | Date, timeZone: string): number {
+  const day = new Date(`${dayKey(instant, timeZone)}T00:00:00Z`).getUTCDay();
+  // getUTCDay(): 0 = Sunday. ISO counts Monday as 1 and Sunday as 7.
+  return day === 0 ? 7 : day;
+}
+
+/**
  * `YYYY-MM-DD` of the ISO week's Monday, rendered in `timeZone`.
  * ISO-8601 weeks (Monday start) are used so week boundaries do not depend on
  * locale — the label is the week's first day, which is what reads best in a

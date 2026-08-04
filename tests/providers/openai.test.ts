@@ -39,9 +39,16 @@ const NAME_ROUTES: StubRoute[] = [
   },
 ];
 
-function context(routes: StubRoute[]) {
+function context(routes: StubRoute[], timeZone = 'UTC', hourlyBuckets = false) {
   const { http, fetch } = stubClient(routes);
-  const ctx: CollectContext = { http, range: RANGE, timeZone: 'UTC', concurrency: 2, now: NOW };
+  const ctx: CollectContext = {
+    http,
+    range: RANGE,
+    timeZone,
+    hourlyBuckets,
+    concurrency: 2,
+    now: NOW,
+  };
   return { ctx, fetch };
 }
 
@@ -206,10 +213,33 @@ describe('OpenAI provider', () => {
       http,
       range: RANGE,
       timeZone: 'Asia/Tokyo',
+      hourlyBuckets: false,
       concurrency: 2,
       now: NOW,
     });
 
     expect(fetch.calls[0]).toContain('bucket_width=1h');
+  });
+
+  it('asks for hourly buckets in UTC too when the caller wants time-of-day detail', async () => {
+    const routes: StubRoute[] = [
+      { when: '/organization/usage/completions', body: { data: [], has_more: false } },
+      ...NAME_ROUTES,
+      { when: '/organization/costs', body: { data: [], has_more: false } },
+    ];
+
+    const plain = context(routes, 'UTC', false);
+    const plainResult = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(
+      plain.ctx,
+    );
+    expect(plain.fetch.calls[0]).toContain('bucket_width=1d');
+    expect(plainResult.capabilities.hourly).toBe(false);
+
+    const asked = context(routes, 'UTC', true);
+    const askedResult = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(
+      asked.ctx,
+    );
+    expect(asked.fetch.calls[0]).toContain('bucket_width=1h');
+    expect(askedResult.capabilities.hourly).toBe(true);
   });
 });

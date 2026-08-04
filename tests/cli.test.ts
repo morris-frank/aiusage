@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { type CliEnvironment, run } from '../src/cli.js';
+import { type CliEnvironment, parseCli, run } from '../src/cli.js';
 import { PROVIDER_IDS } from '../src/types.js';
 
 /**
@@ -361,6 +361,70 @@ describe('splits', () => {
     expect(
       JSON.parse(out.join('\n')).meta.providers.map((provider: { id: string }) => provider.id),
     ).toEqual(['openai', 'anthropic']);
+  });
+
+  it('gives the report a workspace split, so the project panel has something to rank', async () => {
+    const { cli, out } = await environment(
+      ['report', '--json', '--local', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    await run(cli);
+    // Local rows carry no workspace, so the breakdown exists and is honest
+    // about that rather than being absent.
+    expect(JSON.parse(out.join('\n')).daily[0].workspaceBreakdowns).toEqual([
+      expect.objectContaining({ id: '(unattributed)', name: '(no workspace reported)' }),
+    ]);
+  });
+});
+
+describe('derived statistics', () => {
+  it('emits a statistics block on every period report, additively', async () => {
+    const { cli, out } = await environment(
+      ['--json', '--local', ...offline],
+      {},
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    await run(cli);
+    const report = JSON.parse(out.join('\n'));
+
+    // ccusage reports whole local days, so there is no hour to place anything in.
+    expect(report.statistics.timeOfDay).toBeNull();
+    expect(report.meta.notices.map((notice: { code: string }) => notice.code)).toContain(
+      'time-of-day-unavailable',
+    );
+    // Concentration needs no sub-daily grain, so it is answered for every source.
+    expect(report.statistics.concentration).toMatchObject({
+      unit: 'daily',
+      measure: 'cost',
+      activePeriods: 1,
+      topShare: 1,
+    });
+  });
+
+  it('reports no statistics rather than zeroes when the window found no usage', async () => {
+    const { cli, out } = await environment(['--json', ...offline]);
+    await run(cli);
+    const report = JSON.parse(out.join('\n'));
+    expect(report.statistics).toEqual({
+      timeOfDay: null,
+      concentration: null,
+      diagnostics: report.statistics.diagnostics,
+    });
+  });
+
+  it('asks for hourly buckets on report by default, and lets any command opt in or out', async () => {
+    const hourlyFor = async (argv: string[]) => {
+      const { cli } = await environment(argv);
+      return parseCli(cli)?.hourly;
+    };
+
+    // `report` draws the hour panels, so it pays for the extra pages.
+    expect(await hourlyFor(['report'])).toBe(true);
+    expect(await hourlyFor(['report', '--no-hourly'])).toBe(false);
+    // Every other command would pay 24× the buckets for a shape it never draws.
+    expect(await hourlyFor(['daily'])).toBe(false);
+    expect(await hourlyFor(['daily', '--hourly'])).toBe(true);
   });
 });
 

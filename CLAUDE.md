@@ -47,7 +47,13 @@ The rules below exist to make that impossible to do quietly.
     management keys. Deduplicate on evidence (a key hash, a masked label); where no
     evidence exists, warn (`local-overlap-possible`) rather than quietly adding or
     dropping.
-12. **The figure carries its own provenance.** `chart/` output travels without the table,
+12. **A shape the grain cannot support is not drawn.** `statistics.ts` reads records a
+    second time; it never invents resolution the source did not report. A whole-day bucket
+    is excluded from a time-of-day statistic, not spread across 24 hours, and the excluded
+    magnitude is stated (`time-of-day-partial`). A derived statistic is `null` when it
+    cannot be computed, and a panel is absent rather than flat. Consequence, accepted and
+    documented: those panels do not reconcile with the report's totals on a mixed run.
+13. **The figure carries its own provenance.** `chart/` output travels without the table,
     so its caption states the window, the cost provenance, the price sources and every
     source that did not fully report. Soilytix visual language: white report surface, flat,
     hairline rules, Inter, Lime ink for the title and key rule, Mint as the one highlight,
@@ -68,7 +74,8 @@ src/
   collect.ts        runs the providers, one result per platform including skipped ones
   cost.ts           measurement → money, with provenance (reported/allocated/imported/…)
   aggregate.ts      grouping by period and by dimension (incl. agent)
-  report.ts         the JSON contract (ccusage-shaped + additive meta)
+  statistics.ts     derived shape: time of day, spend concentration — never a total
+  report.ts         the JSON contract (ccusage-shaped + additive meta/statistics)
   render.ts         terminal tables, capability matrix, notices
   chart/            the report: tokens.ts (visual vocabulary + vendor marks),
                     figure.ts (the SVG panels), page.ts (printable HTML)

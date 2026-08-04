@@ -91,6 +91,7 @@ const DECLARED: ProviderCapabilities = {
   splitByAccount: true,
   splitByWorkspace: true,
   livePricing: false,
+  hourly: true,
   maxLookbackDays: null,
 };
 
@@ -119,7 +120,10 @@ async function collect(
 ): Promise<ProviderResult> {
   const diagnostics: Diagnostic[] = [];
   const headers = authHeaders(credentials.adminKey);
-  const bucketWidth = context.timeZone === 'UTC' ? '1d' : '1h';
+  // Hourly buckets are needed for two independent reasons: grouping into a
+  // non-UTC day at all, and knowing *when in the day* usage happened. Either
+  // one asking is enough.
+  const bucketWidth = context.hourlyBuckets || context.timeZone !== 'UTC' ? '1h' : '1d';
   const window = fetchWindow(context.range, context.timeZone);
 
   try {
@@ -141,6 +145,7 @@ async function collect(
       splitByAccount: groupBy.includes('account_id'),
       splitByWorkspace: groupBy.includes('workspace_id'),
       reportedCost: costRecords.length > 0,
+      hourly: bucketWidth === '1h',
     };
     const status = diagnostics.some((d) => d.level === 'warning') ? 'partial' : 'ok';
     return {
@@ -157,7 +162,7 @@ async function collect(
     return {
       provider: 'anthropic',
       status: 'error',
-      capabilities: { ...DECLARED, usage: false, reportedCost: false },
+      capabilities: { ...DECLARED, usage: false, reportedCost: false, hourly: false },
       records: [],
       costRecords: [],
       diagnostics,

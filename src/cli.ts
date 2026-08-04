@@ -109,6 +109,10 @@ OPTIONS
                               or html when --local saves to a file)
       --print                print the report figure to stdout even with --local
       --granularity <g>      report grain: daily|weekly|monthly (default: daily)
+      --hourly               ask for hourly buckets, so time-of-day statistics can
+                              be computed (default for report; --no-hourly opts out).
+                              Costs ~24× the buckets; OpenRouter and ccusage report
+                              whole days only and stay out of those statistics
       --no-cost              omit cost entirely (tokens only)
       --compact              drop secondary columns for narrow terminals
       --color / --no-color   force colour on/off (default: auto)
@@ -154,6 +158,8 @@ type ParsedOptions = {
   print: boolean;
   /** Only `report` sets this; other commands take their grain from the command. */
   granularity: Granularity | null;
+  /** Ask the platforms that support them for hourly buckets. */
+  hourly: boolean;
 };
 
 export type CliEnvironment = {
@@ -199,6 +205,7 @@ export async function run(environment: CliEnvironment): Promise<number> {
     range: options.range,
     timeZone: options.timeZone,
     only: options.providers,
+    hourlyBuckets: options.hourly,
     http,
     now: environment.now,
     local: options.local
@@ -544,6 +551,8 @@ const CLI_OPTIONS = {
   format: { type: 'string' },
   print: { type: 'boolean', default: false },
   granularity: { type: 'string' },
+  hourly: { type: 'boolean', default: false },
+  'no-hourly': { type: 'boolean', default: false },
   'no-cost': { type: 'boolean', default: false },
   compact: { type: 'boolean', default: false },
   color: { type: 'boolean', default: false },
@@ -594,6 +603,10 @@ export function parseCli(environment: CliEnvironment): ParsedOptions | null {
     format: parseFormat(values.format),
     print: values.print === true,
     granularity: parseGranularity(values.granularity, command),
+    // `report` draws the time-of-day panels, so it pays for hourly buckets by
+    // default; every other command would pay 24× the buckets for a shape it
+    // never renders, and opts in instead. --no-hourly opts back out.
+    hourly: values['no-hourly'] === true ? false : values.hourly === true || command === 'report',
   };
 }
 
@@ -678,7 +691,10 @@ function parseSplits(split: string[] | undefined, command: Command): SplitDimens
     // Model breakdowns are the ccusage-compatible default; the figure also
     // needs a series dimension, and agent is the one every source can answer
     // without lumping ccusage's local agents under the literal id `ccusage`.
-    if (command === 'report') return ['model', 'agent'];
+    // Workspace comes last so it stays out of `seriesDimension`'s way while
+    // still giving the figure its per-project ranking (OpenAI projects,
+    // Anthropic workspaces, OpenRouter workspaces).
+    if (command === 'report') return ['model', 'agent', 'workspace'];
     return command === 'daily' || command === 'weekly' || command === 'monthly' ? ['model'] : [];
   }
   const requested = split.flatMap((value) => value.split(',')).map((value) => value.trim());

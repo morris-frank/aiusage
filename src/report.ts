@@ -11,9 +11,10 @@
  *                 outputTokens, totalCost, totalTokens } }
  *
  * Everything aiusage adds is **additive**: extra keys on rows (`provider`,
- * `apiKeyBreakdowns`, `accountBreakdowns`, …) and a top-level `meta` block
- * carrying provenance, per-provider capabilities and warnings. No shared key
- * changes meaning.
+ * `apiKeyBreakdowns`, `accountBreakdowns`, …), a top-level `meta` block carrying
+ * provenance, per-provider capabilities and warnings, and a top-level
+ * `statistics` block carrying derived shape (time of day, spend concentration).
+ * No shared key changes meaning.
  *
  * One deliberate compatibility wart: `totalCost` is always a number, so a bucket
  * with no obtainable cost reports `0` — `metadata.costSource: "unavailable"` and
@@ -26,6 +27,7 @@ import type { Collection } from './collect.js';
 import type { CostedRecord, CostingResult, CostSource } from './cost.js';
 import { canonicalModelId } from './models.js';
 import { microsToUsd } from './money.js';
+import { computeStatistics, type UsageStatistics } from './statistics.js';
 import {
   type DateRange,
   type Diagnostic,
@@ -143,6 +145,12 @@ export type PeriodReport = {
   weekly?: ReportRow[];
   monthly?: ReportRow[];
   totals: ReportTotals;
+  /**
+   * aiusage addition: derived shape — time of day, spend concentration. Never a
+   * total, and every part of it is nullable, because a shape the collected
+   * grain cannot support is reported as absent rather than flattened into one.
+   */
+  statistics: UsageStatistics;
   meta: ReportMeta;
 };
 
@@ -179,9 +187,18 @@ export function buildPeriodReport(
   options: ReportOptions,
 ): PeriodReport {
   const rows = periods.map((period) => toRow(period, options));
+  const statistics = computeStatistics(costing.records, periods, {
+    range: options.range,
+    timeZone: options.timeZone,
+    granularity: options.granularity,
+    includeCost: options.includeCost,
+  });
   const report: PeriodReport = {
     totals: toTotals(totals, options.includeCost),
-    meta: buildMeta(collection, costing, options),
+    statistics,
+    // The statistics' own diagnostics belong with every other notice, so a
+    // reader of `meta.notices` sees what the shape panels left out too.
+    meta: buildMeta(collection, costing, options, statistics.diagnostics),
   };
   report[options.granularity] = rows;
   return report;
@@ -302,6 +319,7 @@ function buildMeta(
   collection: Collection,
   costing: CostingResult,
   options: ReportOptions,
+  extraNotices: readonly Diagnostic[] = [],
 ): ReportMeta {
   return {
     tool: 'aiusage',
@@ -325,6 +343,7 @@ function buildMeta(
       ...collection.diagnostics,
       ...costing.diagnostics,
       ...modelCanonicalizationNotice(costing.records),
+      ...extraNotices,
     ],
   };
 }

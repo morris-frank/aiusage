@@ -128,7 +128,9 @@ function periodReport(includeCost = true) {
 describe('ccusage compatibility', () => {
   it('emits the granularity as the top-level key, alongside totals', () => {
     const report = periodReport();
-    expect(Object.keys(report).sort()).toEqual(['daily', 'meta', 'totals']);
+    // Exact, so an accidental top-level key is caught. `statistics` is a
+    // deliberate additive block; `daily`/`totals` keep ccusage's meaning.
+    expect(Object.keys(report).sort()).toEqual(['daily', 'meta', 'statistics', 'totals']);
     expect(report.weekly).toBeUndefined();
   });
 

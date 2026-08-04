@@ -258,6 +258,7 @@ export function renderProviderMatrix(
     { header: 'API key' },
     { header: 'Account' },
     { header: 'Workspace' },
+    { header: 'Hourly' },
     { header: 'Lookback' },
   ];
 
@@ -270,6 +271,7 @@ export function renderProviderMatrix(
     yesNo(provider.capabilities.splitByApiKey),
     yesNo(provider.capabilities.splitByAccount),
     yesNo(provider.capabilities.splitByWorkspace),
+    yesNo(provider.capabilities.hourly),
     lookback(provider.capabilities),
   ]);
 
