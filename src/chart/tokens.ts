@@ -21,7 +21,7 @@ export const TOKEN = {
   /** Mint — the one primary highlight. */
   highlight: '#1AB172',
   /** Deep Mint — Mint at text sizes. */
-  highlightInk: '#118B61',
+  highlightInk: '#0B714E',
   /** Mint accent-soft: the note/invariant tint everything soft derives from. */
   accentSoft: '#E3EFE0',
   accentSoftInk: '#0B5E49',
