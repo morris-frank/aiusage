@@ -47,6 +47,7 @@ description = "Render the report figure into AIUSAGE_REPORT_DIR (used by the dai
 # older checkout would report yesterday's code against today's numbers.
 depends = ["build"]
 run = "node dist/bin.js report"
+alias = "r"
 
 [tasks.lint]
 description = "Lint (Biome, no writes)"
