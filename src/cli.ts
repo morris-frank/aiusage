@@ -212,7 +212,7 @@ export async function run(environment: CliEnvironment): Promise<number> {
       ? {
           command: config.ccusageCommand,
           offline: options.offline,
-          timeoutMs: config.timeoutMs,
+          timeoutMs: config.ccusageTimeoutMs,
         }
       : null,
     ...(environment.runCommand ? { localRunner: environment.runCommand } : {}),

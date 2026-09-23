@@ -87,4 +87,9 @@ describe('local source configuration', () => {
       'ccusage@latest',
     ]);
   });
+
+  it('gives the subprocess a budget of its own, not the per-request HTTP one', () => {
+    expect(loadConfig({ AIUSAGE_TIMEOUT_MS: '5000' }).ccusageTimeoutMs).toBe(120_000);
+    expect(loadConfig({ AIUSAGE_CCUSAGE_TIMEOUT_MS: '300000' }).ccusageTimeoutMs).toBe(300_000);
+  });
 });

@@ -48,6 +48,7 @@ const CONFIG: RuntimeConfig = {
   concurrency: 4,
   secrets: ['sk-admin-key', 'sk-ant-admin01-key'],
   ccusageCommand: null,
+  ccusageTimeoutMs: 120_000,
 };
 
 const ROUTES: StubRoute[] = [

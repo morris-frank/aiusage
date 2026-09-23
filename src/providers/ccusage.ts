@@ -88,6 +88,8 @@ export type CommandResult = {
   code: number;
   stdout: string;
   stderr: string;
+  /** The runner killed it on the timeout rather than it exiting on its own. */
+  timedOut?: boolean;
 };
 
 /** Injected so tests never spawn a process. */
@@ -173,7 +175,13 @@ async function collect(
       continue;
     }
     if (outcome.code !== 0) {
-      attempts.push(`${command}: exit ${outcome.code}${firstLine(outcome.stderr)}`);
+      // A kill leaves an empty stderr and an exit code of 1, which reads as a
+      // ccusage failure; say which it was or the next failure is diagnosed blind.
+      attempts.push(
+        outcome.timedOut
+          ? `${command}: timed out after ${config.timeoutMs}ms`
+          : `${command}: exit ${outcome.code}${firstLine(outcome.stderr)}`,
+      );
       continue;
     }
     const parsed = parsePayload(outcome.stdout);
@@ -386,7 +394,8 @@ const runCommand: CommandRunner = (command, args, timeoutMs) =>
             : error
               ? 1
               : 0;
-        resolve({ code, stdout, stderr });
+        const timedOut = Boolean(error && (error as { killed?: boolean }).killed);
+        resolve({ code, stdout, stderr, timedOut });
       },
     );
   });

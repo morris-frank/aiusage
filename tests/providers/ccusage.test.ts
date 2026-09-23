@@ -160,6 +160,22 @@ describe('local agent source (ccusage)', () => {
     expect(result.diagnostics[0]?.message).toContain('ENOENT');
   });
 
+  it('names a timeout as one rather than as an ordinary non-zero exit', async () => {
+    const killed: CommandRunner = async () => ({
+      code: 1,
+      stdout: '',
+      stderr: '',
+      timedOut: true,
+    });
+    const result = await createCcusageProvider(
+      { command: ['ccusage'], offline: false, timeoutMs: 30_000 },
+      killed,
+    ).collect(context());
+
+    expect(result.status).toBe('error');
+    expect(result.diagnostics[0]?.message).toContain('timed out after 30000ms');
+  });
+
   it('falls back to the next invocation when the first is not installed', async () => {
     const calls: string[] = [];
     const runFallback: CommandRunner = async (command) => {

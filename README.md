@@ -98,6 +98,7 @@ without credentials is **skipped and said so**.
 | `OPENAI_ORG_ID` | OpenAI | Only for multi-org admin keys. |
 | `ANTHROPIC_ADMIN_KEY` | Claude | Admin API key (`sk-ant-admin…`) or org OAuth token. |
 | `AIUSAGE_CCUSAGE_CMD` | Local | How to run ccusage for `--local`; discovered otherwise. |
+| `AIUSAGE_CCUSAGE_TIMEOUT_MS` | Local | Timeout for that subprocess (default 120000). |
 | `AIUSAGE_REPORT_DIR` | — | Where `report` saves its figure; the working directory otherwise. |
 
 OpenAI and Anthropic remain one credential each: their admin keys are org-scoped, and

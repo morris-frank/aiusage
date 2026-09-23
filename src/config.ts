@@ -93,9 +93,15 @@ export type RuntimeConfig = {
    * provider discovers it (a `ccusage` on PATH, else `npx`).
    */
   ccusageCommand: string[] | null;
+  /** How long the ccusage subprocess may take, from `AIUSAGE_CCUSAGE_TIMEOUT_MS`. */
+  ccusageTimeoutMs: number;
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+// The ccusage subprocess is not an HTTP request: it may install itself through
+// npx and then read months of agent logs off disk, so the HTTP budget starves
+// it. A run killed at 30s reported no local usage at all (2026-09-14).
+const DEFAULT_CCUSAGE_TIMEOUT_MS = 120_000;
 const DEFAULT_CONCURRENCY = 4;
 
 function trimmed(value: string | undefined): string | null {
@@ -209,6 +215,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
     // Split on whitespace only: this is an argv, not a shell line — no quoting,
     // no globbing, nothing that would need a shell to interpret it.
     ccusageCommand: ccusageCommand ? ccusageCommand.split(/\s+/) : null,
+    ccusageTimeoutMs: positiveInt(
+      env.AIUSAGE_CCUSAGE_TIMEOUT_MS,
+      DEFAULT_CCUSAGE_TIMEOUT_MS,
+      'AIUSAGE_CCUSAGE_TIMEOUT_MS',
+    ),
   };
 }
 
