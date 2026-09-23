@@ -1,6 +1,21 @@
-# aiusage
+<img src="brand/icon/icon-aiusage-on-obsidian-512.png" align="left" width="128" hspace="16" alt="aiusage icon">
 
-`ccusage` for the platforms.
+<h3>aiusage</h3>
+
+<p>
+  <sub><code>CCUSAGE</code> FOR THE PLATFORMS</sub>
+  <br>
+  <strong>What your organisation spent on LLM APIs, by user, key, model and workspace.</strong>
+  <br>
+  <br>
+  <img src="https://img.shields.io/badge/OpenRouter-8EDE3D?style=flat-square&amp;labelColor=16211B" alt="OpenRouter">
+  <img src="https://img.shields.io/badge/OpenAI%20Platform-8EDE3D?style=flat-square&amp;labelColor=16211B" alt="OpenAI Platform">
+  <img src="https://img.shields.io/badge/Claude%20Platform-8EDE3D?style=flat-square&amp;labelColor=16211B" alt="Claude Platform">
+  <img src="https://img.shields.io/badge/local-via%20ccusage-1AB172?style=flat-square&amp;labelColor=16211B" alt="Local agents via ccusage">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1AB172?style=flat-square&amp;labelColor=16211B" alt="MIT license"></a>
+</p>
+
+<br clear="left">
 
 [`ccusage`](https://github.com/ryoppippi/ccusage) reads local agent logs and tells you what
 your coding CLIs cost. `aiusage` asks the **platform billing APIs** the same question, so
