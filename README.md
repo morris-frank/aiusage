@@ -5,14 +5,15 @@
 <p>
   <sub><code>CCUSAGE</code> FOR THE PLATFORMS</sub>
   <br>
-  <strong>What your organisation spent on LLM APIs, by user, key, model and workspace.</strong>
+  <strong>What your organisation spent on LLM APIs, by account, key, model and workspace.</strong>
   <br>
   <br>
-  <img src="https://img.shields.io/badge/OpenRouter-8EDE3D?style=flat-square&amp;labelColor=16211B" alt="OpenRouter">
-  <img src="https://img.shields.io/badge/OpenAI%20Platform-8EDE3D?style=flat-square&amp;labelColor=16211B" alt="OpenAI Platform">
-  <img src="https://img.shields.io/badge/Claude%20Platform-8EDE3D?style=flat-square&amp;labelColor=16211B" alt="Claude Platform">
-  <img src="https://img.shields.io/badge/local-via%20ccusage-1AB172?style=flat-square&amp;labelColor=16211B" alt="Local agents via ccusage">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-1AB172?style=flat-square&amp;labelColor=16211B" alt="MIT license"></a>
+  <a href="https://www.npmjs.com/package/@maurice-frank/aiusage"><img src="https://img.shields.io/npm/v/@maurice-frank/aiusage?style=flat-square&amp;color=CB3837&amp;logo=npm&amp;labelColor=2D2825" alt="npm version"></a>
+  <img src="https://img.shields.io/badge/OpenRouter-D78A7A?style=flat-square&amp;labelColor=2D2825" alt="OpenRouter">
+  <img src="https://img.shields.io/badge/OpenAI%20Platform-D78A7A?style=flat-square&amp;labelColor=2D2825" alt="OpenAI Platform">
+  <img src="https://img.shields.io/badge/Claude%20Platform-D78A7A?style=flat-square&amp;labelColor=2D2825" alt="Claude Platform">
+  <img src="https://img.shields.io/badge/local-via%20ccusage-7E9688?style=flat-square&amp;labelColor=2D2825" alt="Local agents via ccusage">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7E9688?style=flat-square&amp;labelColor=2D2825" alt="MIT license"></a>
 </p>
 
 <br clear="left">
