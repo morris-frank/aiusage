@@ -24,13 +24,13 @@ notebooks, agents), split by **user account, API key, model and workspace**, pri
 what the platform actually billed.
 
 ```bash
-npx aiusage                       # daily usage across every configured platform
-npx aiusage --json                # ccusage-shaped JSON (see "JSON contract")
-npx aiusage keys                  # which API key spent what
-npx aiusage accounts --days 7     # which person spent what, last 7 days
-npx aiusage monthly -b            # months, with per-model rows
-npx aiusage --local               # platforms *and* local agents, via ccusage
-npx aiusage report --out spend.svg  # the report figure
+npx @maurice-frank/aiusage                          # daily usage across every configured platform
+npx @maurice-frank/aiusage --json                   # ccusage-shaped JSON (see "JSON contract")
+npx @maurice-frank/aiusage keys                     # which API key spent what
+npx @maurice-frank/aiusage accounts --days 7        # which person spent what, last 7 days
+npx @maurice-frank/aiusage monthly -b               # months, with per-model rows
+npx @maurice-frank/aiusage --local                  # platforms *and* local agents, via ccusage
+npx @maurice-frank/aiusage report --out spend.svg   # the report figure
 ```
 
 ## Capability matrix
