@@ -2,31 +2,25 @@
  * The report figure: stacked panels on one shared time axis, as a self-contained
  * SVG.
  *
- * Four panels when cost was collected, three without it:
+ * Panels, top to bottom:
  *
- *   - **cost per period**, stacked by series — composition and the peak period;
- *   - **cumulative cost** per series, each line labelled at its end point;
- *   - **tokens per period**, stacked by the same series — where the volume went,
- *     which is not the same shape as where the money went;
+ *   - **cost per period** and **tokens per period**, each stacked by series —
+ *     composition and the peak period, and where the volume went, which is not
+ *     the same shape as where the money went. On the page they share one box
+ *     behind a toggle; a bare SVG draws both;
  *   - **token mix**, the share of each period that was uncached input, output,
  *     cache write and cache read. Absolute tokens are already in the panel above,
  *     so this one is normalised: it answers "what kind of tokens", and a caching
- *     change shows up here first.
+ *     change shows up here first;
+ *   - **top models** beside **cumulative cost** per series, each line labelled
+ *     at its end point.
  *
- * Two more panels answer questions the time series cannot:
+ * No time-of-day panel: ccusage and OpenRouter report whole days only, so an
+ * hour panel could draw only the remaining platforms — on a `--local` run, a
+ * sliver of the spend presented as the whole day's shape. The statistic stays
+ * in the JSON and the page's summary strip, where its coverage is stated.
  *
- *   - **time of day** — the same measure summed by hour of the reader's clock,
- *     one bar per hour, and **weekday × hour** as a heatmap behind it. These are
- *     drawn only from sources that reported sub-daily buckets; a whole-day
- *     bucket is excluded rather than spread across 24 hours, and the caption
- *     states what was left out. The heatmap's colour is a *rank*, not a
- *     magnitude — spend per hour is heavy-tailed enough that linear bins put
- *     almost every cell in the lightest step — which the caption also says.
- *   - **projects** — cost ranked by workspace (an OpenAI project, an Anthropic
- *     or OpenRouter workspace). Usage that carried no workspace is shown as its
- *     own disclosed row, never dropped.
- *
- * A further panel, **top models**, answers a different question from the series
+ * The **top models** panel answers a different question from the series
  * panels above: not "how did this move over time" but "which model, ranked".
  * Model is a high-cardinality categorical nested under provider (a handful of
  * providers, dozens of models), so it gets a dot chart — position along a
@@ -53,13 +47,12 @@
  * depends on hue alone.
  */
 
-import { type SplitDimension, UNATTRIBUTED_KEY } from '../aggregate.js';
+import type { SplitDimension } from '../aggregate.js';
 import { formatUsd } from '../money.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../report.js';
-import type { HourBucket, WeekHourCell } from '../statistics.js';
 import {
+  displayModel,
   escapeXml,
-  SEQUENTIAL_RAMP,
   SERIES_COLOURS,
   TOKEN,
   TOKEN_CLASSES,
@@ -80,6 +73,12 @@ export type ChartOptions = {
    * page that already carries the heading, so the title is not printed twice.
    */
   header?: boolean;
+  /**
+   * Draw cost, tokens and token mix per period as one tabbed panel. Only the
+   * page sets this: it carries the script and styles the tabs need, and a bare
+   * SVG keeps the separate panels so it loses nothing.
+   */
+  interactive?: boolean;
 };
 
 export type Series = {
@@ -96,23 +95,33 @@ export type Series = {
 
 type Measure = 'cost' | 'tokens';
 
+type StackedSpec = { kind: 'stacked'; id: string; title: string; measure: Measure };
+
 type PanelSpec =
-  | { kind: 'stacked'; id: string; title: string; measure: Measure }
+  | StackedSpec
   | { kind: 'cumulative'; id: string; title: string; measure: Measure }
-  | { kind: 'mix'; id: string; title: string }
+  | MixSpec
   | {
       kind: 'ranked';
       id: string;
       title: string;
       measure: Measure;
-      /** What a row is. Drives the panel's own key, which differs per subject. */
-      subject: 'model' | 'workspace';
       rows: RankedRow[];
     }
-  | { kind: 'hours'; id: string; title: string; measure: Measure; hours: readonly HourBucket[] }
-  | { kind: 'week'; id: string; title: string; measure: Measure; cells: readonly WeekHourCell[] };
+  | {
+      /** Per-period views sharing one box, one shown at a time (the page's tabs). */
+      kind: 'tabs';
+      id: string;
+      views: readonly TabView[];
+    };
 
-type Box = { top: number; bottom: number };
+type MixSpec = { kind: 'mix'; id: string; title: string };
+type TabView = StackedSpec | MixSpec;
+
+/** Panels are laid out in rows: one full-width panel, or two side by side. */
+type PanelRow = PanelSpec[];
+
+type Box = { top: number; bottom: number; left: number; right: number };
 
 /** One row of a dot chart: a named thing, ranked, marked by its vendor. */
 type RankedRow = {
@@ -138,9 +147,8 @@ const RANK_ROW_HEIGHT = 22;
 const RANK_CAPACITY = 8;
 /** Room for the model label and its vendor mark, left of the dot chart's axis. */
 const RANK_LEFT_MARGIN = 210;
-/** One row per ISO weekday in the weekday × hour heatmap. */
-const WEEK_ROW_HEIGHT = 17;
-const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const;
+/** Where a two-panel row splits, as a share of the figure's width. */
+const SPLIT = 0.55;
 
 const BREAKDOWN_KEY: Record<SplitDimension, keyof ReportRow> = {
   model: 'modelBreakdowns',
@@ -167,21 +175,34 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const series = buildSeries(rows, options);
   const measure: Measure = options.includeCost ? 'cost' : 'tokens';
   const rankedModels = buildModelRanking(rows, measure);
-  const rankedWorkspaces = buildWorkspaceRanking(rows, measure);
-  const panels = panelSpecs(report, options, rankedModels, rankedWorkspaces);
+  const panelRows = panelSpecs(report, options, rankedModels);
 
   const withHeader = options.header !== false;
   const legendRows = Math.max(1, Math.ceil(series.length / 4));
   const legendTop = withHeader ? 126 : 30;
   const firstPanelTop = legendTop + legendRows * 22 + 30;
-  const boxes: Box[] = [];
+  const placed: { spec: PanelSpec; box: Box }[] = [];
   let panelTop = firstPanelTop;
-  for (const spec of panels) {
-    const panelHeight = panelHeightOf(spec);
-    boxes.push({ top: panelTop, bottom: panelTop + panelHeight });
-    panelTop += panelHeight + PANEL_GAP;
+  for (const panelRow of panelRows) {
+    const panelHeight = Math.max(...panelRow.map(panelHeightOf));
+    const bottom = panelTop + panelHeight;
+    const split = Math.round(width * SPLIT);
+    // Side by side, the left panel ends short of the split so its value labels
+    // clear the right panel's y axis labels.
+    const columns: [number, number][] =
+      panelRow.length === 1
+        ? [[LEFT, right]]
+        : [
+            [LEFT, split - 60],
+            [split + 70, right],
+          ];
+    panelRow.forEach((spec, index) => {
+      const [left, columnRight] = columns[index] ?? [LEFT, right];
+      placed.push({ spec, box: { top: panelTop, bottom, left, right: columnRight } });
+    });
+    panelTop = bottom + PANEL_GAP;
   }
-  const captionTop = (boxes.at(-1)?.bottom ?? firstPanelTop) + 58;
+  const captionTop = (placed.at(-1)?.box.bottom ?? firstPanelTop) + 58;
   const captionText = wrapAll(
     captionLines(report, options, series, rankedModels),
     width - LEFT * 2,
@@ -191,15 +212,13 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const parts: string[] = [
     `<rect x="0" y="0" width="${width}" height="${height}" fill="${TOKEN.surface}"/>`,
     ...(withHeader ? header(report, options, width, series) : []),
-    ...legend(series, legendTop, width, options),
-    ...panels.flatMap((spec, index) =>
-      panelGroup(spec, boxes[index] ?? { top: 0, bottom: 0 }, rows, series, right),
-    ),
+    ...legendsFor(panelRows, series, legendTop, width, options),
+    ...placed.flatMap(({ spec, box }) => panelGroup(spec, box, rows, series)),
     ...caption(captionText, captionTop),
   ];
 
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}" role="img" aria-labelledby="aiusage-chart-title aiusage-chart-desc">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}"${options.interactive ? ` data-view="${options.includeCost ? 'cost' : 'tokens'}"` : ''} role="img" aria-labelledby="aiusage-chart-title aiusage-chart-desc">`,
     `<title id="aiusage-chart-title">${escapeXml(titleOf(options))}</title>`,
     `<desc id="aiusage-chart-desc">${escapeXml(
       chartDescription(report, options, series, rankedModels),
@@ -220,10 +239,7 @@ function chartDescription(
   const reporting = report.meta.providers.filter((provider) => provider.status === 'ok').length;
   const incomplete = report.meta.providers.length - reporting;
   const ranking = rankedModels.length > 1 ? ', a model ranking,' : '';
-  const timeOfDay = report.statistics.timeOfDay
-    ? ` Hour-of-day and weekday panels cover the ${report.statistics.timeOfDay.sources.length} source(s) that reported sub-daily buckets; the busiest hour was ${String(report.statistics.timeOfDay.peakHour ?? 0).padStart(2, '0')}:00 in ${report.meta.timezone}.`
-    : ' No time-of-day panel: no source reported buckets finer than a day.';
-  return `${titleOf(options)} from ${since} to ${until}, showing ${measure} over time${ranking} and token-class mix across ${series.length} ${SERIES_NOUN[options.series]} series.${timeOfDay} ${reporting} sources fully reported; ${incomplete} were partial, skipped, unsupported, or failed. Cost provenance and incomplete-source status are stated in the figure caption.`;
+  return `${titleOf(options)} from ${since} to ${until}, showing ${measure} over time${ranking} and token mix across ${series.length} ${SERIES_NOUN[options.series]} series. ${reporting} sources fully reported; ${incomplete} were partial, skipped, unsupported, or failed. Cost provenance and incomplete-source status are in the figure caption.`;
 }
 
 export function periodsOf(report: PeriodReport): ReportRow[] {
@@ -232,7 +248,6 @@ export function periodsOf(report: PeriodReport): ReportRow[] {
 
 function panelHeightOf(spec: PanelSpec): number {
   if (spec.kind === 'ranked') return rankedPanelHeight(spec.rows.length);
-  if (spec.kind === 'week') return WEEKDAY_LABELS.length * WEEK_ROW_HEIGHT;
   return PANEL_HEIGHT;
 }
 
@@ -240,91 +255,47 @@ function panelSpecs(
   report: PeriodReport,
   options: ChartOptions,
   rankedModels: readonly RankedRow[],
-  rankedWorkspaces: readonly RankedRow[],
-): PanelSpec[] {
+): PanelRow[] {
   const cadence = cadenceOf(report);
-  const specs: PanelSpec[] = [];
-  if (options.includeCost) {
-    specs.push({ kind: 'stacked', id: 'cost-daily', title: `${cadence} cost`, measure: 'cost' });
-    specs.push({
-      kind: 'cumulative',
-      id: 'cost-cumulative',
-      title: 'Cumulative cost',
-      measure: 'cost',
-    });
-    specs.push({
-      kind: 'stacked',
-      id: 'tokens-daily',
-      title: `${cadence} tokens`,
-      measure: 'tokens',
-    });
-  } else {
-    // Without cost there is nothing to compare tokens against, so the token
-    // panels take both the composition and the accumulation.
-    specs.push({
-      kind: 'stacked',
-      id: 'tokens-daily',
-      title: `${cadence} tokens`,
-      measure: 'tokens',
-    });
-    specs.push({
-      kind: 'cumulative',
-      id: 'tokens-cumulative',
-      title: 'Cumulative tokens',
-      measure: 'tokens',
-    });
-  }
   const measure: Measure = options.includeCost ? 'cost' : 'tokens';
-  const measureNoun = measure === 'cost' ? 'cost' : 'tokens';
+  const tokens = {
+    kind: 'stacked',
+    id: 'tokens-daily',
+    title: `${cadence} tokens`,
+    measure: 'tokens',
+  } as const;
+  const cost = { kind: 'stacked', id: 'cost-daily', title: `${cadence} cost`, measure } as const;
+  const mix = { kind: 'mix', id: 'token-mix', title: 'Token mix' } as const;
+  const perPeriod: StackedSpec[] = options.includeCost ? [cost, tokens] : [tokens];
+  const rows: PanelRow[] = options.interactive
+    ? [[{ kind: 'tabs', id: 'per-period', views: [...perPeriod, mix] }]]
+    : [...perPeriod.map((spec) => [spec]), [mix]];
 
-  // A ranking needs at least two models to rank; with zero or one, the panel
-  // above already says everything it could.
-  if (rankedModels.length > 1) {
-    specs.push({
-      kind: 'ranked',
-      id: 'model-rank',
-      title: `Top models by ${measureNoun}`,
-      measure,
-      subject: 'model',
-      rows: [...rankedModels],
-    });
-  }
-  if (rankedWorkspaces.length > 0) {
-    specs.push({
-      kind: 'ranked',
-      id: 'workspace-rank',
-      title: `Projects and workspaces by ${measureNoun}`,
-      measure,
-      subject: 'workspace',
-      rows: [...rankedWorkspaces],
-    });
-  }
-
-  // Time of day exists only for the sources that reported sub-daily buckets; a
-  // null statistic means none did, and no panel is a truer answer than a flat
-  // one drawn from whole days.
-  const timeOfDay = report.statistics.timeOfDay;
-  if (timeOfDay) {
-    specs.push({
-      kind: 'hours',
-      id: 'time-of-day',
-      title: `${measureNoun === 'cost' ? 'Cost' : 'Tokens'} by hour of day (${report.meta.timezone})`,
-      measure,
-      hours: timeOfDay.hours,
-    });
-    if (timeOfDay.week.length > 1) {
-      specs.push({
-        kind: 'week',
-        id: 'week-hours',
-        title: 'Weekday × hour',
-        measure,
-        cells: timeOfDay.week,
-      });
-    }
-  }
-
-  specs.push({ kind: 'mix', id: 'token-mix', title: 'Token mix' });
-  return specs;
+  // The ranking and the accumulation share a row: both answer "where did the
+  // window's total go", one by model and one over time. A ranking needs at
+  // least two models to rank; with zero or one, the cumulative panel takes the
+  // row alone.
+  const cumulative: PanelSpec = {
+    kind: 'cumulative',
+    id: `${measure}-cumulative`,
+    title: `Cumulative ${measure}`,
+    measure,
+  };
+  rows.push(
+    rankedModels.length > 1
+      ? [
+          {
+            kind: 'ranked',
+            id: 'model-rank',
+            title: `Top models by ${measure}`,
+            measure,
+            rows: [...rankedModels],
+          },
+          cumulative,
+        ]
+      : [cumulative],
+  );
+  return rows;
 }
 
 function rankedPanelHeight(count: number): number {
@@ -473,75 +444,6 @@ function buildModelRanking(rows: readonly ReportRow[], measure: Measure): Ranked
   return kept;
 }
 
-/**
- * Workspaces — an OpenAI project, an Anthropic or OpenRouter workspace — ranked
- * across the window. This is the closest thing any billing API has to "which
- * project spent this": a *platform* project, not a directory on this machine.
- * No source collected here reports the repo an agent ran in, so nothing in this
- * panel pretends to.
- *
- * Usage whose platform reported no workspace keeps its own row rather than being
- * dropped or folded into a named one — on a run with local agent rows that row
- * is most of the figure, and hiding it would make the named workspaces look like
- * the whole picture. Returns nothing at all when *no* workspace was ever named,
- * since a single "(no workspace reported)" bar answers no question.
- */
-function buildWorkspaceRanking(rows: readonly ReportRow[], measure: Measure): RankedRow[] {
-  const found = new Map<
-    string,
-    { label: string; value: number; providers: Set<string>; named: boolean }
-  >();
-
-  for (const row of rows) {
-    for (const workspace of row.workspaceBreakdowns ?? []) {
-      const entry = found.get(workspace.id) ?? {
-        label: workspace.name,
-        value: 0,
-        providers: new Set<string>(),
-        // Everything that is not the unattributed bucket is a workspace the
-        // platform itself named.
-        named: workspace.id !== UNATTRIBUTED_KEY,
-      };
-      entry.value += measureOf(workspace, measure);
-      for (const provider of workspace.providers) entry.providers.add(provider);
-      found.set(workspace.id, entry);
-    }
-  }
-
-  if (![...found.values()].some((entry) => entry.named)) return [];
-
-  const ranked: RankedRow[] = [...found.values()]
-    .map((entry) => {
-      const providers = [...entry.providers].sort();
-      return {
-        label: entry.label,
-        // The mark names the platform that billed the workspace; more than one
-        // platform behind one workspace id has no single honest mark.
-        vendor: providers.length === 1 ? vendorOf(providers[0] ?? '') : ('other' as VendorId),
-        value: entry.value,
-        agents: providers,
-        mixedAgent: false,
-        isOther: false,
-        unattributed: !entry.named,
-      };
-    })
-    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
-
-  if (ranked.length <= RANK_CAPACITY) return ranked;
-  const kept = ranked.slice(0, RANK_CAPACITY);
-  const tail = ranked.slice(RANK_CAPACITY);
-  kept.push({
-    label: `Other ${tail.length} workspaces`,
-    vendor: 'other',
-    value: tail.reduce((sum, one) => sum + one.value, 0),
-    agents: [...new Set(tail.flatMap((one) => one.agents))].sort(),
-    mixedAgent: false,
-    isOther: true,
-    tailCount: tail.length,
-  });
-  return kept;
-}
-
 function valueOfModel(model: ModelBreakdown, measure: Measure): number {
   return measure === 'cost'
     ? (model.cost ?? 0)
@@ -598,12 +500,45 @@ function header(
   ];
 }
 
-function legend(
+/**
+ * The figure's legend. With tabs, each view gets its own — series with cost,
+ * series with tokens, the token classes — and shows with its view, so the key
+ * always matches the bars under it.
+ */
+function legendsFor(
+  panelRows: readonly PanelRow[],
   series: readonly Series[],
   top: number,
   width: number,
   options: ChartOptions,
 ): string[] {
+  const tabs = panelRows.flat().find((spec) => spec.kind === 'tabs');
+  if (!tabs) return legend(series, top, width, options.includeCost ? 'cost' : 'tokens');
+  return tabs.views.flatMap((view) => [
+    `<g data-layer="${layerOf(view)}">`,
+    ...(view.kind === 'mix' ? tokenClassKey(LEFT, top) : legend(series, top, width, view.measure)),
+    '</g>',
+  ]);
+}
+
+function layerOf(view: TabView): string {
+  return view.kind === 'mix' ? 'mix' : view.measure;
+}
+
+function tokenClassKey(left: number, y: number): string[] {
+  const parts: string[] = [];
+  let x = left;
+  for (const klass of TOKEN_CLASSES) {
+    parts.push(
+      `<rect x="${x}" y="${y - 9}" width="8" height="8" fill="${klass.colour}"/>`,
+      text(x + 13, y, klass.label, { size: 12, fill: TOKEN.body }),
+    );
+    x += 32 + labelWidth(klass.label);
+  }
+  return parts;
+}
+
+function legend(series: readonly Series[], top: number, width: number, measure: Measure): string[] {
   const parts: string[] = ['<g data-part="legend">'];
   const columns = Math.min(4, Math.max(1, series.length));
   const columnWidth = (width - LEFT - 92) / columns;
@@ -612,9 +547,10 @@ function legend(
     const x = LEFT + (index % columns) * columnWidth;
     const y = top + Math.floor(index / columns) * 22;
     const label = truncate(entry.label, 24);
-    const amount = options.includeCost
-      ? formatUsd(Math.round(entry.costTotal * 1_000_000))
-      : compactTokens(entry.tokenTotal);
+    const amount =
+      measure === 'cost'
+        ? formatUsd(Math.round(entry.costTotal * 1_000_000))
+        : compactTokens(entry.tokenTotal);
     parts.push(
       vendorMark(entry.vendor, x, y - 11, 12, entry.colour),
       `<rect x="${x + 18}" y="${y - 9}" width="8" height="8" fill="${entry.colour}"/>`,
@@ -631,31 +567,108 @@ function panelGroup(
   box: Box,
   rows: readonly ReportRow[],
   series: readonly Series[],
-  right: number,
 ): string[] {
-  const body = panelBody(spec, box, rows, series, right);
+  if (spec.kind === 'tabs') return tabsPanel(spec, box, rows, series);
 
   return [
     `<g data-panel="${spec.id}">`,
     ...panelTitle(spec, box),
-    ...body,
+    ...panelBody(spec, box, rows, series),
     // Only the period panels share the figure's date axis. A ranking's rows are
-    // models or workspaces and an hour panel's slots are clock hours; a date
-    // axis under either would claim an ordering along time that isn't there.
+    // models; a date axis under it would claim an ordering along time that
+    // isn't there.
     ...(spec.kind === 'stacked' || spec.kind === 'cumulative' || spec.kind === 'mix'
-      ? axisDates(rows, box.bottom, right)
+      ? axisDates(rows, box, box.right)
       : []),
     `</g>`,
   ];
 }
 
-function panelBody(
-  spec: PanelSpec,
+/**
+ * The page's per-period panel: every view drawn into one box, each view's title
+ * and scaffold in its own layer, and one set of bars carrying the geometry of
+ * every stacked view — so switching cost ⇄ tokens moves the same bars to their
+ * new heights instead of swapping two drawings. The page's stylesheet shows one
+ * layer at a time; its script animates the bars.
+ */
+function tabsPanel(
+  spec: PanelSpec & { kind: 'tabs' },
   box: Box,
   rows: readonly ReportRow[],
   series: readonly Series[],
-  right: number,
 ): string[] {
+  const parts = [`<g data-panel="${spec.id}">`];
+  const stacks = new Map<Measure, Stack>();
+  for (const view of spec.views) {
+    parts.push(`<g data-layer="${layerOf(view)}">`, ...panelTitleText(view.title, box));
+    if (view.kind === 'mix') {
+      parts.push(...mixPanel(rows, box, box.right));
+    } else {
+      const stack = stackOf(rows, series, box, box.right, view.measure);
+      stacks.set(view.measure, stack);
+      parts.push(...grid(box, box.right, stack.max, formatFor(view.measure)));
+    }
+    parts.push('</g>');
+  }
+
+  // Segments line up across measures: same period, same series, same order.
+  const [first] = stacks.values();
+  parts.push('<g data-layer="bars">');
+  first?.segments.forEach((segment, index) => {
+    const shapes = [...stacks].map(([measure, stack]) => {
+      const one = stack.segments[index] ?? segment;
+      return { measure, y: round(one.y), height: round(one.height) };
+    });
+    if (shapes.every((shape) => shape.height === 0)) return;
+    const data = shapes.map((shape) => `data-${shape.measure}="${shape.y} ${shape.height}"`);
+    parts.push(
+      `<rect x="${round(segment.x)}" y="${round(segment.y)}" width="${round(segment.width)}" height="${round(segment.height)}" fill="${segment.colour}" ${data.join(' ')}/>`,
+    );
+  });
+  parts.push(
+    '</g>',
+    baseline(box, box.right),
+    ...axisDates(rows, box, box.right),
+    ...tabButtons(spec.views, box),
+    '</g>',
+  );
+  return parts;
+}
+
+/** The tabs, right-aligned on the panel's title line. */
+function tabButtons(views: readonly TabView[], box: Box): string[] {
+  const gap = 8;
+  const widths = views.map((view) => labelWidth(tabLabel(view)) * 0.9 + 26);
+  let x = box.right - widths.reduce((sum, width) => sum + width + gap, -gap);
+  const parts: string[] = [];
+  views.forEach((view, index) => {
+    const width = round(widths[index] ?? 0);
+    parts.push(
+      `<g data-show="${layerOf(view)}" role="button" tabindex="0" aria-label="Show ${escapeXml(view.title.toLowerCase())}">`,
+      `<rect x="${round(x)}" y="${box.top - 30}" width="${width}" height="22" rx="11" fill="none" stroke="${TOKEN.rule}" stroke-width="1"/>`,
+      text(round(x + width / 2), box.top - 15, tabLabel(view), {
+        size: 11,
+        fill: TOKEN.muted,
+        anchor: 'middle',
+      }),
+      '</g>',
+    );
+    x += width + gap;
+  });
+  return parts;
+}
+
+function tabLabel(view: TabView): string {
+  return view.kind === 'mix' ? 'Token mix' : view.measure === 'cost' ? 'Cost' : 'Tokens';
+}
+
+function panelBody(
+  spec: Exclude<PanelSpec, { kind: 'tabs' }>,
+  box: Box,
+  rows: readonly ReportRow[],
+  series: readonly Series[],
+): string[] {
+  const right = box.right;
   switch (spec.kind) {
     case 'mix':
       return mixPanel(rows, box, right);
@@ -663,24 +676,24 @@ function panelBody(
       return stackedPanel(rows, series, box, right, spec.measure);
     case 'ranked':
       return rankedPanel(spec.rows, box, right, spec.measure);
-    case 'hours':
-      return hoursPanel(spec.hours, box, right, spec.measure);
-    case 'week':
-      return weekPanel(spec.cells, box, right, spec.measure);
     case 'cumulative':
       return cumulativePanel(series, box, right, spec.measure);
   }
 }
 
-function panelTitle(spec: PanelSpec, box: Box): string[] {
-  const parts = [
-    text(LEFT, box.top - 14, spec.title, { size: 11.5, fill: TOKEN.muted, letterSpacing: 0.3 }),
+function panelTitleText(title: string, box: Box): string[] {
+  return [
+    text(box.left, box.top - 14, title, { size: 11.5, fill: TOKEN.muted, letterSpacing: 0.3 }),
   ];
+}
+
+function panelTitle(spec: Exclude<PanelSpec, { kind: 'tabs' }>, box: Box): string[] {
+  const parts = panelTitleText(spec.title, box);
 
   // The mix panel's series are the token classes, so its key sits with it rather
   // than in the figure legend.
   if (spec.kind === 'mix') {
-    let x = LEFT + 90;
+    let x = box.left + 90;
     for (const klass of TOKEN_CLASSES) {
       parts.push(
         `<rect x="${x}" y="${box.top - 22}" width="8" height="8" fill="${klass.colour}"/>`,
@@ -694,12 +707,10 @@ function panelTitle(spec: PanelSpec, box: Box): string[] {
   // The model ranking's colour means "agent", not "model" — a different mapping
   // from whatever the figure's own legend is keying on (which follows
   // `options.series` and could be model, API key, or anything else) — so it
-  // carries its own small key rather than relying on the legend above it. The
-  // workspace ranking's marks name the platform that billed the workspace, and
-  // the figure legend already covers those, so it needs no second key.
-  if (spec.kind === 'ranked' && spec.subject === 'model') {
+  // carries its own small key rather than relying on the legend above it.
+  if (spec.kind === 'ranked') {
     const agents = [...new Set(spec.rows.flatMap((row) => row.agents))].sort();
-    let x = LEFT + 150;
+    let x = box.left + 150;
     for (const agent of agents) {
       const vendor = vendorOf(agent);
       const colour = vendorColour(vendor);
@@ -711,18 +722,6 @@ function panelTitle(spec: PanelSpec, box: Box): string[] {
     }
   }
 
-  // The heatmap's own key: five steps of the sequential ramp, labelled as the
-  // ranks they are rather than with values they do not carry.
-  if (spec.kind === 'week') {
-    let x = LEFT + 110;
-    parts.push(text(x, box.top - 14, 'quietest', { size: 10, fill: TOKEN.subtle }));
-    x += labelWidth('quietest') + 6;
-    for (const colour of SEQUENTIAL_RAMP) {
-      parts.push(`<rect x="${x}" y="${box.top - 22}" width="14" height="9" fill="${colour}"/>`);
-      x += 15;
-    }
-    parts.push(text(x + 5, box.top - 14, 'busiest', { size: 10, fill: TOKEN.subtle }));
-  }
   return parts;
 }
 
@@ -771,21 +770,68 @@ function grid(box: Box, right: number, max: number, format: Format): string[] {
     const at = round(y(value));
     if (at < box.top - 1) break;
     parts.push(
-      `<line x1="${LEFT}" y1="${at}" x2="${right}" y2="${at}" stroke="${TOKEN.grid}" stroke-width="1"/>`,
-      text(LEFT - 10, at + 4, format(value), { size: 11, fill: TOKEN.muted, anchor: 'end' }),
+      `<line x1="${box.left}" y1="${at}" x2="${right}" y2="${at}" stroke="${TOKEN.grid}" stroke-width="1"/>`,
+      text(box.left - 10, at + 4, format(value), { size: 11, fill: TOKEN.muted, anchor: 'end' }),
     );
   }
   return parts;
 }
 
 function baseline(box: Box, right: number): string {
-  return `<line x1="${LEFT}" y1="${box.bottom}" x2="${right}" y2="${box.bottom}" stroke="${TOKEN.rule}" stroke-width="1"/>`;
+  return `<line x1="${box.left}" y1="${box.bottom}" x2="${right}" y2="${box.bottom}" stroke="${TOKEN.rule}" stroke-width="1"/>`;
 }
 
-function slots(count: number, right: number): { centre: (index: number) => number; width: number } {
-  const usable = right - LEFT;
+function slots(
+  count: number,
+  left: number,
+  right: number,
+): { centre: (index: number) => number; width: number } {
+  const usable = right - left;
   const slot = count > 0 ? usable / count : usable;
-  return { centre: (index) => LEFT + slot * (index + 0.5), width: slot };
+  return { centre: (index) => left + slot * (index + 0.5), width: slot };
+}
+
+type Segment = { x: number; y: number; width: number; height: number; colour: string };
+type Stack = { max: number; segments: Segment[] };
+
+/**
+ * Every period × series segment of a stacked panel, empty ones included (at
+ * zero height), so two measures' stacks line up segment for segment.
+ */
+function stackOf(
+  rows: readonly ReportRow[],
+  series: readonly Series[],
+  box: Box,
+  right: number,
+  measure: Measure,
+): Stack {
+  const values = (entry: Series): number[] => (measure === 'cost' ? entry.cost : entry.tokens);
+  const perPeriod = rows.map((_row, index) =>
+    series.reduce((sum, entry) => sum + (values(entry)[index] ?? 0), 0),
+  );
+  const max = Math.max(0, ...perPeriod);
+  const y = scaleOf(box, axisMax(max));
+  const { centre, width } = slots(rows.length, box.left, right);
+  const barWidth = Math.max(2, Math.min(22, width * 0.62));
+
+  const segments: Segment[] = [];
+  rows.forEach((_row, index) => {
+    let base = 0;
+    for (const entry of series) {
+      const value = Math.max(0, values(entry)[index] ?? 0);
+      const top = y(base + value);
+      const bottom = y(base);
+      base += value;
+      segments.push({
+        x: centre(index) - barWidth / 2,
+        y: top,
+        width: barWidth,
+        height: value > 0 ? Math.max(0.6, bottom - top) : 0,
+        colour: entry.colour,
+      });
+    }
+  });
+  return { max, segments };
 }
 
 function stackedPanel(
@@ -795,36 +841,10 @@ function stackedPanel(
   right: number,
   measure: Measure,
 ): string[] {
-  const values = (entry: Series): number[] => (measure === 'cost' ? entry.cost : entry.tokens);
-  const perPeriod = rows.map((_row, index) =>
-    series.reduce((sum, entry) => sum + (values(entry)[index] ?? 0), 0),
-  );
-  const max = Math.max(0, ...perPeriod);
-  const y = scaleOf(box, axisMax(max));
-  const { centre, width } = slots(rows.length, right);
-  const barWidth = Math.max(2, Math.min(22, width * 0.62));
-
-  const bars: string[] = [];
-  rows.forEach((_row, index) => {
-    let base = 0;
-    for (const entry of series) {
-      const value = values(entry)[index] ?? 0;
-      if (value <= 0) continue;
-      const top = y(base + value);
-      const bottom = y(base);
-      base += value;
-      bars.push(
-        rect(
-          centre(index) - barWidth / 2,
-          top,
-          barWidth,
-          Math.max(0.6, bottom - top),
-          entry.colour,
-        ),
-      );
-    }
-  });
-
+  const { max, segments } = stackOf(rows, series, box, right, measure);
+  const bars = segments
+    .filter((segment) => segment.height > 0)
+    .map((segment) => rect(segment.x, segment.y, segment.width, segment.height, segment.colour));
   return [...grid(box, right, max, formatFor(measure)), ...bars, baseline(box, right)];
 }
 
@@ -841,7 +861,7 @@ function cumulativePanel(
   const max = Math.max(0, ...totals);
   const y = scaleOf(box, axisMax(max));
   const count = values(series[0] ?? emptySeries()).length;
-  const { centre } = slots(count, right);
+  const { centre } = slots(count, box.left, right);
   const format = formatFor(measure);
 
   const parts = grid(box, right, max, format);
@@ -892,7 +912,10 @@ function cumulativePanel(
   return parts;
 }
 
-/** Push labels apart, then lift the whole group if it runs past `limit`. */
+/**
+ * Push labels apart downwards, then back up from `limit` — so only the labels
+ * crowded against the floor move up, not every label above them.
+ */
 function spread(positions: readonly number[], gap: number, limit: number): number[] {
   const out: number[] = [];
   let previous = Number.NEGATIVE_INFINITY;
@@ -901,8 +924,13 @@ function spread(positions: readonly number[], gap: number, limit: number): numbe
     out.push(at);
     previous = at;
   }
-  const overflow = (out.at(-1) ?? 0) - limit;
-  return overflow > 0 ? out.map((value) => value - overflow) : out;
+  let next = limit + gap;
+  for (let index = out.length - 1; index >= 0; index--) {
+    const at = Math.min(out[index] ?? limit, next - gap);
+    out[index] = at;
+    next = at;
+  }
+  return out;
 }
 
 /**
@@ -917,7 +945,7 @@ function rankedPanel(
   right: number,
   measure: Measure,
 ): string[] {
-  const axisLeft = LEFT + RANK_LEFT_MARGIN;
+  const axisLeft = box.left + RANK_LEFT_MARGIN;
   const max = Math.max(0, ...models.map((model) => model.value));
   const top = axisMax(max);
   const step = niceStep(max);
@@ -938,12 +966,13 @@ function rankedPanel(
     const colour = model.vendor === 'other' ? TOKEN.subtle : vendorColour(model.vendor);
     // A superscript dagger, not a second line, so a mixed-agent model still
     // fits in one row height — the caption spells out what it means.
-    const label =
-      truncate(model.label, model.mixedAgent ? 27 : 30) + (model.mixedAgent ? ' †' : '');
+    const name = model.isOther ? model.label : displayModel(model.label);
+    const label = truncate(name, model.mixedAgent ? 27 : 30) + (model.mixedAgent ? ' †' : '');
 
     parts.push(
       vendorMark(model.vendor, axisLeft - 26, y - 6, 12, colour),
-      text(axisLeft - 36, y + 4, label, { size: 11.5, fill: TOKEN.body, anchor: 'end' }),
+      // The short name is for reading; the full id stays one hover away.
+      `<g><title>${escapeXml(model.label)}</title>${text(axisLeft - 36, y + 4, label, { size: 11.5, fill: TOKEN.body, anchor: 'end' })}</g>`,
     );
     if (model.value > 0) {
       const at = round(x(model.value));
@@ -958,163 +987,21 @@ function rankedPanel(
 }
 
 /**
- * The window's measure summed by hour of the clock: 24 fixed slots, so an hour
- * with nothing in it is visibly empty rather than missing. One series, so it
- * takes the single Mint highlight, and the busiest hour is labelled directly —
- * "when do we spend" is the whole question, and it should not need a ruler.
- *
- * The x axis here is a clock, not the figure's date axis: the same 06:00 slot
- * holds every 06:00 in the window.
- */
-function hoursPanel(
-  hours: readonly HourBucket[],
-  box: Box,
-  right: number,
-  measure: Measure,
-): string[] {
-  const value = (hour: HourBucket): number => (measure === 'cost' ? (hour.cost ?? 0) : hour.tokens);
-  const max = Math.max(0, ...hours.map(value));
-  const y = scaleOf(box, axisMax(max));
-  const { centre, width } = slots(hours.length, right);
-  const barWidth = Math.max(2, Math.min(22, width * 0.62));
-  const format = formatFor(measure);
-
-  const parts = grid(box, right, max, format);
-  const peak = hours.reduce<HourBucket | null>(
-    (best, hour) => (value(hour) > 0 && (best === null || value(hour) > value(best)) ? hour : best),
-    null,
-  );
-
-  hours.forEach((hour, index) => {
-    const amount = value(hour);
-    if (amount <= 0) return;
-    const top = y(amount);
-    parts.push(
-      rect(
-        centre(index) - barWidth / 2,
-        top,
-        barWidth,
-        Math.max(0.6, box.bottom - top),
-        TOKEN.highlight,
-      ),
-    );
-    if (peak && hour.hour === peak.hour) {
-      parts.push(
-        text(round(centre(index)), top - 7, format(amount), {
-          size: 10.5,
-          fill: TOKEN.highlightInk,
-          anchor: 'middle',
-        }),
-      );
-    }
-  });
-
-  // Every third hour, so the axis reads as a clock without crowding.
-  for (const hour of [0, 3, 6, 9, 12, 15, 18, 21]) {
-    parts.push(
-      text(round(centre(hour)), box.bottom + 18, `${String(hour).padStart(2, '0')}:00`, {
-        size: 10.5,
-        fill: TOKEN.muted,
-        anchor: 'middle',
-      }),
-    );
-  }
-
-  parts.push(baseline(box, right));
-  return parts;
-}
-
-/**
- * Weekday × hour, as a heatmap. The weekly rhythm — a working day, an on-call
- * night, a batch job every Sunday — is a two-dimensional shape that no single
- * series can show.
- *
- * Colour is the cell's **rank** among the non-empty cells, not its magnitude:
- * spend per hour is heavy-tailed enough that linear bins would put nearly every
- * cell in the lightest step and hide exactly the structure the panel exists for.
- * A rank encoding cannot be read as "twice as dark, twice the money", so the
- * caption says so, and the panel above carries the magnitudes.
- */
-function weekPanel(
-  cells: readonly WeekHourCell[],
-  box: Box,
-  right: number,
-  measure: Measure,
-): string[] {
-  const value = (cell: WeekHourCell): number =>
-    measure === 'cost' ? (cell.cost ?? 0) : cell.tokens;
-  const filled = cells.filter((cell) => value(cell) > 0);
-  const ordered = [...filled].map(value).sort((a, b) => a - b);
-  const cellWidth = (right - LEFT) / 24;
-
-  const parts: string[] = [];
-  for (const [index, label] of WEEKDAY_LABELS.entries()) {
-    const top = box.top + index * WEEK_ROW_HEIGHT;
-    parts.push(
-      text(LEFT - 10, top + WEEK_ROW_HEIGHT / 2 + 3.5, label, {
-        size: 10.5,
-        fill: TOKEN.muted,
-        anchor: 'end',
-      }),
-      // A hairline row so an all-quiet weekday is present and empty, not absent.
-      `<rect x="${LEFT}" y="${round(top)}" width="${round(right - LEFT)}" height="${round(WEEK_ROW_HEIGHT - 2)}" fill="none" stroke="${TOKEN.grid}" stroke-width="1"/>`,
-    );
-  }
-  // Hour separators every three hours: without them a quiet stretch reads as one
-  // wide cell rather than the several empty hours it actually is.
-  for (const hour of [3, 6, 9, 12, 15, 18, 21]) {
-    const at = round(LEFT + hour * cellWidth);
-    parts.push(
-      `<line x1="${at}" y1="${round(box.top)}" x2="${at}" y2="${round(box.bottom - 2)}" stroke="${TOKEN.grid}" stroke-width="1"/>`,
-    );
-  }
-
-  for (const cell of filled) {
-    // weekday is ISO (1 = Monday), and row 0 is Monday.
-    const row = cell.weekday - 1;
-    if (row < 0 || row >= WEEKDAY_LABELS.length) continue;
-    const rank = ordered.indexOf(value(cell)) / Math.max(1, ordered.length - 1);
-    const step = Math.min(SEQUENTIAL_RAMP.length - 1, Math.floor(rank * SEQUENTIAL_RAMP.length));
-    parts.push(
-      rect(
-        LEFT + cell.hour * cellWidth + 0.5,
-        box.top + row * WEEK_ROW_HEIGHT + 0.5,
-        cellWidth - 1,
-        WEEK_ROW_HEIGHT - 3,
-        SEQUENTIAL_RAMP[step] ?? TOKEN.accentSoft,
-      ),
-    );
-  }
-
-  for (const hour of [0, 3, 6, 9, 12, 15, 18, 21]) {
-    parts.push(
-      text(
-        round(LEFT + hour * cellWidth + cellWidth / 2),
-        box.bottom + 16,
-        `${String(hour).padStart(2, '0')}`,
-        { size: 10, fill: TOKEN.muted, anchor: 'middle' },
-      ),
-    );
-  }
-  return parts;
-}
-
-/**
  * Share of each period's tokens by class. Normalised on purpose: the absolute
  * counts are in the panel above, and what this panel is for — a change in how
  * much of the workload is cache reads — is invisible at absolute scale.
  */
 function mixPanel(rows: readonly ReportRow[], box: Box, right: number): string[] {
   const y = scaleOf(box, 100);
-  const { centre, width } = slots(rows.length, right);
+  const { centre, width } = slots(rows.length, box.left, right);
   const barWidth = Math.max(2, Math.min(22, width * 0.62));
 
   const parts: string[] = [];
   for (const share of [0, 25, 50, 75, 100]) {
     const at = round(y(share));
     parts.push(
-      `<line x1="${LEFT}" y1="${at}" x2="${right}" y2="${at}" stroke="${TOKEN.grid}" stroke-width="1"/>`,
-      text(LEFT - 10, at + 4, `${share}%`, { size: 11, fill: TOKEN.muted, anchor: 'end' }),
+      `<line x1="${box.left}" y1="${at}" x2="${right}" y2="${at}" stroke="${TOKEN.grid}" stroke-width="1"/>`,
+      text(box.left - 10, at + 4, `${share}%`, { size: 11, fill: TOKEN.muted, anchor: 'end' }),
     );
   }
 
@@ -1150,12 +1037,13 @@ function mixPanel(rows: readonly ReportRow[], box: Box, right: number): string[]
   return parts;
 }
 
-function axisDates(rows: readonly ReportRow[], atY: number, right: number): string[] {
+function axisDates(rows: readonly ReportRow[], box: Box, right: number): string[] {
   if (rows.length === 0) return [];
-  const { centre } = slots(rows.length, right);
-  // Label at most ~8 periods; a crowded axis is unreadable and the caption
-  // carries the exact window anyway.
-  const stride = Math.max(1, Math.ceil(rows.length / 8));
+  const { centre } = slots(rows.length, box.left, right);
+  // Label at most one period per ~85px (about 8 across a full-width panel); a
+  // crowded axis is unreadable and the caption carries the exact window anyway.
+  const labels = Math.max(2, Math.floor((right - box.left) / 85));
+  const stride = Math.max(1, Math.ceil(rows.length / labels));
   const last = rows.length - 1;
   // The final period is worth labelling — it says where the window ends — but
   // only when the stride has not already put a label next to it. Drawing both
@@ -1164,7 +1052,7 @@ function axisDates(rows: readonly ReportRow[], atY: number, right: number): stri
   return rows.flatMap((row, index) =>
     index % stride === 0 || (index === last && labelLast)
       ? [
-          text(round(centre(index)), atY + 18, row.period, {
+          text(round(centre(index)), box.bottom + 18, row.period, {
             size: 10.5,
             fill: TOKEN.muted,
             anchor: 'middle',
@@ -1190,13 +1078,13 @@ export function captionLines(
 
   if (options.includeCost) {
     lines.push(
-      `Cost provenance: ${report.totals.costSource} — reported = the platform billed it, allocated = billed coarser and split by derived cost, imported = restated from ccusage’s own calculation, calculated = tokens × unit price.`,
+      `Cost provenance: ${report.totals.costSource}. Reported: billed by platform. Allocated: billed coarser and split by derived cost. Imported: restated from ccusage calculation. Calculated: tokens × unit price.`,
     );
   } else {
     lines.push('Tokens only (--no-cost): cost was not collected, so none is plotted.');
   }
   lines.push(
-    'Token counts are not comparable across models — a cache read and an output token are the same unit and nothing like the same money.',
+    'Token counts are not comparable across models: cache reads and output tokens share a unit, but differ greatly in cost.',
   );
 
   if (series.length === 0) {
@@ -1204,14 +1092,14 @@ export function captionLines(
   }
   if (gapsIn(report, periodsOf(report).length)) {
     lines.push(
-      'The axis has one slot per period that recorded usage; periods with none are omitted rather than drawn as gaps, so horizontal spacing is by period, not by elapsed time.',
+      'The axis shows only periods with recorded usage. Inactive periods are omitted, so horizontal spacing reflects period count rather than elapsed time.',
     );
   }
 
   const notReported = report.meta.providers.filter((provider) => provider.status !== 'ok');
   if (notReported.length > 0) {
     lines.push(
-      `Not fully reported, so absent or partial here: ${notReported
+      `Partially reported or absent: ${notReported
         .map((provider) => `${provider.label} (${provider.status})`)
         .join(', ')}. A missing source is unknown, not zero.`,
     );
@@ -1220,31 +1108,27 @@ export function captionLines(
   const unattributed = report.meta.unattributedCost.reduce((sum, entry) => sum + entry.cost, 0);
   if (unattributed > 0) {
     lines.push(
-      `$${unattributed.toFixed(2)} of billed cost is not token consumption (web search, code execution, session fees) and is excluded from the panels.`,
+      `Excluded from panels: $${unattributed.toFixed(2)} of billed cost for non-token items (web search, code execution, session fees).`,
     );
   }
   if (report.meta.priceSources.length > 0) {
     lines.push(`Unit prices: ${report.meta.priceSources.join(', ')}.`);
   }
 
-  lines.push(...timeOfDayCaption(report));
   lines.push(...concentrationCaption(report));
-  lines.push(...workspaceCaption(report, options));
 
   const tail = rankedModels.find((model) => model.isOther);
   if (tail?.tailCount) {
     lines.push(
-      `The models panel groups the ${tail.tailCount} lowest-total models as "${tail.label}" rather than omitting them; each one's own figure is in modelBreakdowns.`,
+      `The models panel groups the ${tail.tailCount} lowest-total models as "${tail.label}" rather than omitting them; individual figures are in modelBreakdowns.`,
     );
   }
   const mixedAgent = rankedModels.filter((model) => model.mixedAgent);
   if (mixedAgent.length > 0) {
     lines.push(
-      `${mixedAgent.map((model) => model.label).join(', ')} ${mixedAgent.length === 1 ? 'was' : 'were'} run under more than one agent in this window (${[
+      `${mixedAgent.map((model) => displayModel(model.label)).join(', ')} ${mixedAgent.length === 1 ? 'was' : 'were'} run under multiple agents in this window (${[
         ...new Set(mixedAgent.flatMap((model) => model.agents)),
-      ].join(
-        ', ',
-      )}); the models panel marks ${mixedAgent.length === 1 ? 'it' : 'them'} with the neutral ring rather than either agent's colour.`,
+      ].join(', ')}); marked with a neutral ring rather than an agent colour.`,
     );
   }
 
@@ -1254,39 +1138,6 @@ export function captionLines(
       warnings.length > 0 ? ` · ${warnings.length} warning(s) in the report’s meta.notices` : ''
     }`,
   );
-  return lines;
-}
-
-/**
- * What the time-of-day panels do and do not cover. This is the caption block
- * that matters most in the whole figure: an hour panel *looks* like it covers
- * the same money as the panels above it, and on a mixed run it does not.
- */
-function timeOfDayCaption(report: PeriodReport): string[] {
-  const timeOfDay = report.statistics.timeOfDay;
-  if (!timeOfDay) {
-    // The `time-of-day-unavailable` notice already carries the reason in full;
-    // repeating it here would be the same diagnostic twice.
-    return [];
-  }
-
-  const lines = [
-    `Hour of day is in ${report.meta.timezone} and covers only the sources that reported sub-daily buckets (${timeOfDay.sources.join(', ')}); the same hour slot holds every occurrence of it in the window, so its axis is a clock, not a date.`,
-  ];
-  if (timeOfDay.coarseSources.length > 0) {
-    const excluded =
-      timeOfDay.excludedCost === null
-        ? `${timeOfDay.excludedTokens.toLocaleString('en-US')} tokens`
-        : `$${timeOfDay.excludedCost.toFixed(2)} and ${timeOfDay.excludedTokens.toLocaleString('en-US')} tokens`;
-    lines.push(
-      `${excluded} from ${timeOfDay.coarseSources.join(', ')} report whole days only and are excluded from the hour panels rather than spread across 24 hours — those panels are therefore smaller than the totals above them, by design.`,
-    );
-  }
-  if (timeOfDay.week.length > 1) {
-    lines.push(
-      'In the weekday × hour panel colour is the cell’s rank among the busy cells, not its magnitude — hourly spend is too heavy-tailed for linear bins — so read it for pattern and the hour panel above for size.',
-    );
-  }
   return lines;
 }
 
@@ -1300,23 +1151,6 @@ function concentrationCaption(report: PeriodReport): string[] {
       concentration.topDecileShare * 100
     ).toFixed(0)}% in the busiest ${concentration.topDecilePeriods}.`,
   ];
-}
-
-function workspaceCaption(report: PeriodReport, options: ChartOptions): string[] {
-  const ranked = buildWorkspaceRanking(periodsOf(report), options.includeCost ? 'cost' : 'tokens');
-  const unattributed = ranked.find((entry) => entry.unattributed === true && entry.value > 0);
-  const lines: string[] = [];
-  if (ranked.length > 0) {
-    lines.push(
-      'A "project" here is a platform workspace — an OpenAI project, an Anthropic or OpenRouter workspace. No source collected reports the repository or directory an agent ran in, so none is shown.',
-    );
-  }
-  if (unattributed) {
-    lines.push(
-      'Usage whose platform reported no workspace keeps its own row in that panel rather than being dropped or folded into a named one.',
-    );
-  }
-  return lines;
 }
 
 /**

@@ -155,6 +155,51 @@ export function vendorMark(
   }
 }
 
+/** Brand spellings for the leading word of a model id; anything else is capitalised. */
+const MODEL_FAMILIES: Record<string, string> = {
+  deepseek: 'DeepSeek',
+  glm: 'GLM',
+  gpt: 'GPT',
+  minimax: 'MiniMax',
+};
+
+/**
+ * A readable label for a model id — `claude-opus-4-8` → `Opus 4.8`,
+ * `deepseek/deepseek-v4-flash-0731` → `DeepSeek v4 flash`. Display only: the
+ * route prefix and snapshot date are dropped, so two ids can share a label, and
+ * every place that shows one keeps the full id alongside (a tooltip, the JSON).
+ * An agent tag such as `[pi] ` is kept, since it says who ran the model.
+ */
+export function displayModel(id: string): string {
+  const tag = /^\[[^\]]+\]\s*/.exec(id)?.[0] ?? '';
+  const name = id
+    .slice(tag.length)
+    .replace(/^.*\//, '')
+    // A snapshot date: -20251001, -2024-08-06, or a four-digit -0731.
+    .replace(/-(\d{8}|\d{4}-\d{2}-\d{2}|\d{4})$/, '');
+
+  // Claude ids name the family between the prefix and the version, in either
+  // order (`claude-opus-4-8`, the older `claude-3-5-sonnet`).
+  const modern = /^claude-([a-z]+)-(\d+)(?:[-.](\d+))?$/.exec(name);
+  const legacy = /^claude-(\d+)(?:[-.](\d+))?-([a-z]+)$/.exec(name);
+  const [family, major, minor] = modern
+    ? [modern[1], modern[2], modern[3]]
+    : legacy
+      ? [legacy[3], legacy[1], legacy[2]]
+      : [];
+  if (family && major) {
+    return `${tag}${capitalise(family)} ${major}${minor ? `.${minor}` : ''}`;
+  }
+
+  const [first = '', ...rest] = name.split('-');
+  const lead = MODEL_FAMILIES[first] ?? capitalise(first);
+  return name ? `${tag}${[lead, ...rest].join(' ')}` : id;
+}
+
+function capitalise(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
 function round(value: number): number {
   return Math.round(value * 10) / 10;
 }

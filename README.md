@@ -259,7 +259,7 @@ matter what is asked, and say so in `capabilities.hourly`.
 
 ## Derived statistics
 
-`statistics` in the JSON, and two panels plus two summary cards in the report, answer
+`statistics` in the JSON, and two summary cards in the report, answer
 questions the time series cannot. Both are *shape*, never a total, and both are null when the
 collected grain cannot support them.
 
@@ -268,47 +268,37 @@ weekday × hour grid behind it. Built **only from sources that reported sub-dail
 whole-day bucket says nothing about when inside the day its tokens were spent, so it is
 excluded rather than spread across 24 hours: `excludedTokens` / `excludedCost` state how much,
 `coarseSources` names which sources, and a `time-of-day-partial` warning says it out loud.
-**These panels are therefore smaller than the report's own totals whenever a whole-day source
+**The statistic is therefore smaller than the report's own totals whenever a whole-day source
 is in the run** — by design. With no hourly source at all the statistic is `null` and a
 `time-of-day-unavailable` notice gives the reason.
-
-In the weekday × hour heatmap, colour is a cell's **rank** among the busy cells, not its
-magnitude: hourly spend is heavy-tailed enough that linear bins put nearly every cell in the
-lightest step. Read it for pattern and the hour panel above it for size.
 
 **Concentration** — whether the window is spiky or steady: the share of the measure in its
 single busiest period, the fewest periods that together reach half of it, and the share in its
 busiest tenth (rounded up to at least one period, with `topDecilePeriods` saying how many).
 Computed from the same period rows the figure draws, so every source is included.
 
-**Projects** are platform workspaces — an OpenAI project, an Anthropic or OpenRouter
-workspace. Usage whose platform reported no workspace keeps its own row rather than being
-dropped or folded into a named one. No source collected here reports the *repository* an agent
-ran in, so none is shown.
-
 ## The report figure
 
-`aiusage report` draws the same numbers as stacked panels on one shared time axis:
+`aiusage report` draws the same numbers as panels on one shared time axis:
 
-1. **cost per period**, stacked by series;
-2. **cumulative cost** per series, each line labelled at its end point;
-3. **tokens per period**, stacked by the same series: where the volume went is rarely the
-   same shape as where the money went;
-4. **top models**, ranked by cost (or tokens) as a dot chart: position along a shared scale
+1. **cost per period** and **tokens per period**, stacked by series: where the volume went
+   is rarely the same shape as where the money went. The HTML page shows them as one panel
+   with a Cost / Tokens toggle; a bare SVG draws both;
+2. **token mix**, the share of each period that was uncached input, output, cache write and
+   cache read, so a change in caching shows up on its own axis;
+3. **top models**, ranked by cost (or tokens) as a dot chart: position along a shared scale
    (area and colour ramps are avoided), coloured by the *provider* that served each model
    rather than a per-model hue; the tail beyond the top few folds into a disclosed
    "Other N models" row, and a model billed under more than one provider gets the neutral
-   mark instead of either provider's colour;
-5. **projects and workspaces**, ranked the same way, with unattributed usage kept as its own
-   disclosed row — drawn only when a platform actually named a workspace;
-6. **cost by hour of day** on a clock axis, with the busiest hour labelled directly, and
-   **weekday × hour** as a heatmap: see [Derived statistics](#derived-statistics) for which
-   sources these cover and what they leave out;
-7. **token mix**, the share of each period that was uncached input, output, cache write and
-   cache read, so a change in caching shows up on its own axis.
+   mark instead of either provider's colour — beside **cumulative cost** per series, each
+   line labelled at its end point.
 
-With `--no-cost` the two cost panels are dropped, and the token panels
-take both the composition and the accumulation. Each series carries a vendor mark as well
+There is no hour-of-day panel: whole-day sources are excluded from that statistic (see
+[Derived statistics](#derived-statistics)), so on a mixed run it would draw a sliver of the
+spend as the day's shape. The statistic stays in the JSON and the page's summary strip.
+
+With `--no-cost` the cost panels are dropped, and the token panels take both the
+composition and the accumulation. Each series carries a vendor mark as well
 as a colour, so no series depends on hue alone; the marks are original glyphs, distinct from
 vendor logos, and a name that does not identify a vendor gets a neutral one.
 

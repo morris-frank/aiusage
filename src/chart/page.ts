@@ -24,7 +24,15 @@ import {
   renderReportSvg,
   titleOf,
 } from './figure.js';
-import { escapeXml, TOKEN, TOKEN_CLASSES, vendorColour, vendorMark, vendorOf } from './tokens.js';
+import {
+  displayModel,
+  escapeXml,
+  TOKEN,
+  TOKEN_CLASSES,
+  vendorColour,
+  vendorMark,
+  vendorOf,
+} from './tokens.js';
 
 export function renderReportHtml(report: PeriodReport, options: ChartOptions): string {
   const rows = periodsOf(report);
@@ -43,13 +51,15 @@ ${styles()}
 ${headerBlock(report, options)}
 ${cards(report, options)}
 <figure>
-${renderReportSvg(report, { ...options, header: false })}
-${figureCaption(report, options)}
+${renderReportSvg(report, { ...options, header: false, interactive: true, width: 1100 })}
 </figure>
 ${periodTable(report, rows, options)}
 ${sourceTable(report, options)}
 ${noticeList(report)}
 </main>
+<script>
+${tabScript()}
+</script>
 </body>
 </html>
 `;
@@ -69,12 +79,9 @@ body { margin: 0; background: #fff; color: var(--fg); font-family: ${TOKEN.font}
 main { max-width: 1100px; margin: 0 auto; padding: 40px 28px 80px; }
 figure { margin: 32px 0 0; }
 svg { width: 100%; height: auto; display: block; }
-figcaption { max-width: 78ch; margin: 12px 0 0; color: var(--muted); font-size: 12px; }
 
-.eyebrow { font-size: 10.5px; font-weight: 600; letter-spacing: 0.16em; color: var(--lime);
-           text-transform: uppercase; }
 h1 { font-size: 34px; font-weight: 300; line-height: 1.15; color: var(--lime);
-     margin: 6px 0 6px; letter-spacing: -0.01em; }
+     margin: 0 0 6px; letter-spacing: -0.01em; }
 .lede { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
 .rule { height: 1px; background: var(--lime); margin: 0 0 28px; }
 h2 { font-size: 17px; font-weight: 400; color: var(--ink); margin: 44px 0 4px; }
@@ -140,6 +147,21 @@ tfoot td.left { text-align: left; }
 .notices li { margin: 5px 0; }
 .notice-code { color: var(--ink); font-family: ${TOKEN.mono}; font-size: 11px; }
 
+/* The figure's per-period tabs: one view's layers shown, the rest faded out. */
+svg[data-view] [data-layer] { transition: opacity 0.35s ease; }
+svg[data-view="cost"] [data-layer="tokens"], svg[data-view="cost"] [data-layer="mix"],
+svg[data-view="tokens"] [data-layer="cost"], svg[data-view="tokens"] [data-layer="mix"],
+svg[data-view="mix"] [data-layer="cost"], svg[data-view="mix"] [data-layer="tokens"],
+svg[data-view="mix"] [data-layer="bars"] { opacity: 0; pointer-events: none; }
+[data-show] { cursor: pointer; }
+[data-show]:focus { outline: none; }
+[data-show]:focus-visible rect { stroke: var(--ink); }
+svg[data-view="cost"] [data-show="cost"] rect, svg[data-view="tokens"] [data-show="tokens"] rect,
+svg[data-view="mix"] [data-show="mix"] rect { fill: var(--soft); stroke: var(--soft); }
+svg[data-view="cost"] [data-show="cost"] text, svg[data-view="tokens"] [data-show="tokens"] text,
+svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { svg[data-view] [data-layer] { transition: none; } }
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
@@ -152,10 +174,54 @@ tfoot td.left { text-align: left; }
 }`;
 }
 
+/**
+ * Wires the figure's tabs. Cost ⇄ tokens moves the shared bars to the other
+ * measure's heights; token mix fades the scaffold. Without the script the page
+ * still shows the first view.
+ */
+function tabScript(): string {
+  return `const svg = document.querySelector('svg[data-view]');
+if (svg) {
+  const bars = [...svg.querySelectorAll('[data-layer="bars"] rect')];
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let frame = 0;
+  const morph = (measure) => {
+    cancelAnimationFrame(frame);
+    const from = bars.map((bar) => [Number(bar.getAttribute('y')), Number(bar.getAttribute('height'))]);
+    const to = bars.map((bar) => (bar.dataset[measure] ?? '0 0').split(' ').map(Number));
+    const start = performance.now();
+    const step = (now) => {
+      const t = still ? 1 : Math.min(1, (now - start) / 450);
+      const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+      bars.forEach((bar, index) => {
+        const [y0, h0] = from[index];
+        const [y1, h1] = to[index];
+        bar.setAttribute('y', String(y0 + (y1 - y0) * eased));
+        bar.setAttribute('height', String(h0 + (h1 - h0) * eased));
+      });
+      if (t < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+  };
+  const show = (view) => {
+    svg.dataset.view = view;
+    for (const tab of svg.querySelectorAll('[data-show]')) {
+      tab.setAttribute('aria-pressed', String(tab.dataset.show === view));
+    }
+    if (view !== 'mix') morph(view);
+  };
+  for (const tab of svg.querySelectorAll('[data-show]')) {
+    tab.addEventListener('click', () => show(tab.dataset.show));
+    tab.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(tab.dataset.show); }
+    });
+  }
+}`;
+}
+
 function headerBlock(report: PeriodReport, options: ChartOptions): string {
   const { since, until } = report.meta.range;
-  return `<p class="eyebrow">aiusage report</p>
-<h1>${escapeXml(titleOf(options))}</h1>
+  return `<h1>${escapeXml(titleOf(options))}</h1>
 <p class="lede">${escapeXml(
     `${since} to ${until} · grouped ${report.meta.granularity} in ${report.meta.timezone} · generated ${report.meta.generatedAt}`,
   )}</p>
@@ -163,8 +229,6 @@ function headerBlock(report: PeriodReport, options: ChartOptions): string {
 }
 
 function cards(report: PeriodReport, options: ChartOptions): string {
-  const rows = periodsOf(report);
-  const active = rows.filter((row) => row.totalTokens > 0).length;
   const cacheRead = report.totals.cacheReadTokens;
   const share = report.totals.totalTokens > 0 ? (cacheRead / report.totals.totalTokens) * 100 : 0;
 
@@ -182,11 +246,6 @@ function cards(report: PeriodReport, options: ChartOptions): string {
       label: 'Total tokens',
       value: compactTokens(report.totals.totalTokens),
       sub: `${report.totals.totalTokens.toLocaleString('en-US')} across all classes`,
-    },
-    {
-      label: `Active ${periodNoun(report, true).toLowerCase()}`,
-      value: String(active),
-      sub: `of ${rows.length} with usage in range`,
     },
     {
       label: 'Cache reads',
@@ -231,15 +290,6 @@ ${entries
 </div>`;
 }
 
-function figureCaption(report: PeriodReport, options: ChartOptions): string {
-  const cost = options.includeCost
-    ? `Cost is ${report.totals.costSource}; definitions and price sources are carried inside the figure.`
-    : 'Cost was not collected, so the figure shows tokens only.';
-  return `<figcaption>${escapeXml(
-    `Shared, zero-based scales support comparison by position and length. ${cost} Exact values and source status follow below.`,
-  )}</figcaption>`;
-}
-
 function periodTable(
   report: PeriodReport,
   rows: readonly ReportRow[],
@@ -249,12 +299,14 @@ function periodTable(
   const maxTokens = Math.max(0, ...rows.map((row) => row.totalTokens));
   const noun = periodNoun(report, false);
 
-  const body = rows
+  // Newest first: the page is read for "what happened lately".
+  const body = [...rows]
+    .reverse()
     .map((row) => {
       const cells = [
         `<td class="left period">${escapeXml(row.period)}</td>`,
         `<td class="left">${marks(row.metadata.agents.length > 0 ? row.metadata.agents : row.metadata.providers)}</td>`,
-        `<td class="left">${chips(row.modelsUsed)}</td>`,
+        `<td class="left">${modelChips(row.modelsUsed)}</td>`,
         number(row.inputTokens),
         number(row.outputTokens),
         number(row.cacheCreationTokens),
@@ -292,7 +344,7 @@ function periodTable(
   return `<h2>${escapeXml(periodNoun(report, true))}</h2>
 <div class="table-scroll">
 <table>
-<caption>One row per ${noun.toLowerCase()} with usage. Cost bars share a common scale; the four-segment bar shows that ${noun.toLowerCase()}'s token mix (input, output, cache write, cache read).</caption>
+<caption>One row per ${noun.toLowerCase()} with usage, newest first. Cost bars share a common scale; the four-segment bar shows token mix for that ${noun.toLowerCase()} (input, output, cache write, cache read).</caption>
 <thead><tr>${head
     .map((label, index) =>
       index < 3
@@ -316,7 +368,7 @@ function sourceTable(report: PeriodReport, options: ChartOptions): string {
       provider.capabilities.splitByAccount ? 'account' : null,
       provider.capabilities.splitByWorkspace ? 'workspace' : null,
       // Not a split, but the same kind of fact and the one that decides whether
-      // a source appears in the time-of-day panels at all.
+      // a source counts towards the time-of-day statistic at all.
       provider.capabilities.hourly ? 'hourly' : null,
     ].filter((value): value is string => value !== null);
     return splits.length > 0 ? chips(splits, 5) : '<span class="chip">no splits</span>';
@@ -344,7 +396,7 @@ function sourceTable(report: PeriodReport, options: ChartOptions): string {
   return `<h2>Sources</h2>
 <div class="table-scroll">
 <table>
-<caption>What each source actually answered for this run. A non-<code>ok</code> source may leave the totals incomplete; absent usage is unknown, not zero. A source without <code>hourly</code> reported whole days and is absent from the time-of-day panels.</caption>
+<caption>Actual responses per source for this run. Non-<code>ok</code> sources may leave totals incomplete; absent usage is unknown, not zero. Sources without <code>hourly</code> reporting provided whole days only.</caption>
 <thead><tr><th scope="col" class="left">Source</th><th scope="col" class="left">Status</th><th scope="col">Rows</th>${
     options.includeCost ? '<th scope="col">Cost</th>' : ''
   }<th scope="col" class="left">Answered</th></tr></thead>
@@ -364,7 +416,7 @@ function noticeList(report: PeriodReport): string {
     )
     .join('\n');
   return `<h2>Notices</h2>
-<p class="note">Diagnostics emitted by the collection and costing run. These are visible text, not tooltip-only metadata.</p>
+<p class="note">Diagnostics from data collection and costing. Displayed as visible text, not tooltip metadata.</p>
 <ul class="notices">
 ${items}
 </ul>`;
@@ -414,6 +466,30 @@ function marks(names: readonly string[]): string {
     )
     .join('');
   return `<span class="marks" title="${escapeXml(names.join(', '))}">${inner}</span>`;
+}
+
+/** Models by their short names, one chip per name, the full ids on hover. */
+function modelChips(ids: readonly string[], limit = 3): string {
+  const byName = new Map<string, string[]>();
+  for (const id of ids) {
+    const name = displayModel(id);
+    byName.set(name, [...(byName.get(name) ?? []), id]);
+  }
+  if (byName.size === 0) return '<span class="chip">—</span>';
+  const entries = [...byName];
+  const shown = entries
+    .slice(0, limit)
+    .map(
+      ([name, full]) =>
+        `<span class="chip" title="${escapeXml(full.join(', '))}">${escapeXml(name)}</span>`,
+    );
+  if (entries.length > limit) {
+    const rest = entries.slice(limit).flatMap(([, full]) => full);
+    shown.push(
+      `<span class="chip more" title="${escapeXml(rest.join(', '))}">+${entries.length - limit}</span>`,
+    );
+  }
+  return `<span class="chips">${shown.join('')}</span>`;
 }
 
 function chips(values: readonly string[], limit = 3): string {

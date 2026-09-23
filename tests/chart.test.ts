@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
+import { displayModel } from '../src/chart/tokens.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../src/report.js';
 import type { TimeOfDayStatistics } from '../src/statistics.js';
 
@@ -221,7 +222,7 @@ describe('report figure', () => {
     expect(svg).toContain('Cost provenance: reported');
     expect(svg).toContain('OpenRouter (error)');
     expect(svg).toContain('unknown, not zero');
-    expect(svg).toContain('$1.50 of billed cost is not token consumption');
+    expect(svg).toContain('Excluded from panels: $1.50 of billed cost for non-token items');
     expect(svg).toContain('litellm@2026-07-26');
   });
 
@@ -255,9 +256,36 @@ describe('report figure', () => {
     expect(html).toContain('background: #fff');
     expect(html).toContain('class="left period">2026-07-25<');
     expect(html).toContain('some-model');
-    expect(html).toContain('<figcaption>');
-    expect(html).toContain('<caption>One row per day with usage.');
+    expect(html).toContain('<caption>One row per day with usage, newest first.');
     expect(html).toContain('<th scope="col"');
+  });
+
+  it('lists the newest period first, since the page is read for what happened lately', () => {
+    const html = renderReportHtml(
+      report([row('2026-07-24', { anthropic: 1 }), row('2026-07-25', { anthropic: 3 })]),
+      OPTIONS,
+    );
+    expect(html.indexOf('period">2026-07-25<')).toBeLessThan(html.indexOf('period">2026-07-24<'));
+  });
+
+  it('puts cost, tokens and token mix behind tabs on the page, but keeps the panels in a bare SVG', () => {
+    const data = report([row('2026-07-25', { anthropic: 2 })]);
+    const html = renderReportHtml(data, OPTIONS);
+    expect(html).toContain('<g data-panel="per-period">');
+    for (const view of ['cost', 'tokens', 'mix']) {
+      // Each view has its own legend and scaffold layer, and a tab to show it.
+      expect(html.match(new RegExp(`<g data-layer="${view}">`, 'g'))?.length).toBe(2);
+      expect(html).toContain(`data-show="${view}"`);
+    }
+    // One set of bars carries both measures' geometry, so a switch can animate it.
+    expect(html).toMatch(/<rect [^>]*data-cost="[\d.]+ [\d.]+" data-tokens="[\d.]+ [\d.]+"/);
+    expect(html).toContain('svg[data-view="mix"] [data-layer="bars"]');
+
+    const svg = renderReportSvg(data, OPTIONS);
+    expect(svg).not.toContain('data-show=');
+    expect(svg).toContain('data-panel="cost-daily"');
+    expect(svg).toContain('data-panel="tokens-daily"');
+    expect(svg).toContain('data-panel="token-mix"');
   });
 
   it('gives the table the shape of its numbers, and a provenance badge per row', () => {
@@ -272,7 +300,7 @@ describe('report figure', () => {
     expect(html).toContain('class="mix"');
     // Vendor marks travel with the row, and models are chips rather than prose.
     expect(html).toContain('class="marks"');
-    expect(html).toContain('class="chip">some-model<');
+    expect(html).toContain('title="some-model">Some model<');
   });
 
   it('lists every source with what it actually answered', () => {
@@ -441,9 +469,10 @@ describe('report figure', () => {
       OPTIONS,
     );
 
-    expect(svg).toContain('anthropic/claude-haiku-4.5 †');
-    expect(svg).toContain('run under more than one agent');
-    expect(svg).toContain('anthropic/claude-haiku-4.5 was run');
+    // Short name on the row, the full id on hover.
+    expect(svg).toContain('>Haiku 4.5 †<');
+    expect(svg).toContain('<title>anthropic/claude-haiku-4.5</title>');
+    expect(svg).toContain('Haiku 4.5 was run under multiple agents');
   });
 });
 
@@ -477,72 +506,15 @@ function timeOfDay(byHour: Record<number, number>, overrides: Partial<TimeOfDayS
 }
 
 describe('time-of-day panels', () => {
-  it('draws no hour panel at all when no source reported sub-daily buckets', () => {
-    const svg = renderReportSvg(report([row('2026-07-25', { openrouter: 2 })]), OPTIONS);
-    // A flat 24-bar panel drawn from whole days would be an invented shape.
+  it('draws no hour panel even when a source reported sub-daily buckets', () => {
+    // Whole-day sources are excluded from the statistic, so on a mixed run an
+    // hour panel shows a sliver of the spend as if it were the day's shape.
+    const svg = renderReportSvg(
+      report([row('2026-07-25', { anthropic: 9 })], {}, { timeOfDay: timeOfDay({ 9: 6, 22: 3 }) }),
+      OPTIONS,
+    );
     expect(svg).not.toContain('data-panel="time-of-day"');
     expect(svg).not.toContain('data-panel="week-hours"');
-  });
-
-  it('draws one bar per busy hour on a clock axis, labelling the peak', () => {
-    const svg = renderReportSvg(
-      report([row('2026-07-25', { anthropic: 9 })], {}, { timeOfDay: timeOfDay({ 9: 6, 22: 3 }) }),
-      OPTIONS,
-    );
-
-    const hours = panel(svg, 'time-of-day');
-    expect(svg).toContain('Cost by hour of day (UTC)');
-    // The axis is a clock, not the figure's date axis — which the period panels
-    // still carry, so this has to be asserted inside this panel alone.
-    expect(hours).toContain('>09:00<');
-    expect(hours).toContain('>21:00<');
-    expect(hours).not.toContain('2026-07-25');
-    // Two busy hours, so two bars — the other 22 slots stay empty.
-    expect(hours.match(/<rect/g)?.length).toBe(2);
-    // The peak is labelled directly rather than left to a ruler.
-    expect(hours).toContain('$6.00');
-  });
-
-  it('states which sources the hour panels cover, and what they leave out', () => {
-    const svg = renderReportSvg(
-      report(
-        [row('2026-07-25', { anthropic: 4 })],
-        {},
-        {
-          timeOfDay: timeOfDay(
-            { 9: 4 },
-            { coarseSources: ['openrouter', 'ccusage'], excludedCost: 6, excludedTokens: 5000 },
-          ),
-        },
-      ),
-      OPTIONS,
-    );
-
-    expect(svg).toContain('covers only the sources that reported sub-daily buckets');
-    expect(svg).toContain('$6.00 and 5,000 tokens from openrouter, ccusage');
-    expect(svg).toContain('excluded from the hour panels rather than spread across 24 hours');
-  });
-
-  it('separates the hours of the heatmap, so a quiet stretch is not one wide cell', () => {
-    const svg = renderReportSvg(
-      report([row('2026-07-25', { anthropic: 9 })], {}, { timeOfDay: timeOfDay({ 9: 6, 22: 3 }) }),
-      OPTIONS,
-    );
-    // Seven separators at the three-hourly marks, plus one hairline row per
-    // weekday, so an empty run of hours still reads as several hours.
-    expect(panel(svg, 'week-hours').match(/<line/g)?.length).toBe(7);
-    expect(panel(svg, 'week-hours').match(/<rect[^>]*fill="none"/g)?.length).toBe(7);
-  });
-
-  it('says the heatmap’s colour is a rank, so it cannot be read as a magnitude', () => {
-    const svg = renderReportSvg(
-      report([row('2026-07-25', { anthropic: 9 })], {}, { timeOfDay: timeOfDay({ 9: 6, 22: 3 }) }),
-      OPTIONS,
-    );
-    expect(svg).toContain('data-panel="week-hours"');
-    expect(svg).toContain('rank among the busy cells, not its magnitude');
-    expect(svg).toContain('>Mon<');
-    expect(svg).toContain('>Sun<');
   });
 });
 
@@ -551,34 +523,11 @@ describe('project and concentration statistics', () => {
     return { ...row('2026-07-25', { anthropic: 4 }), workspaceBreakdowns: rows };
   }
 
-  it('ranks platform workspaces, and keeps unattributed usage as its own row', () => {
+  it('draws no project panel, even when a platform named a workspace', () => {
     const svg = renderReportSvg(
-      report([
-        withWorkspaces([
-          { ...breakdown('anthropic', 3), id: 'ws_1', name: 'Platform' },
-          { ...breakdown('anthropic', 1), id: '(unattributed)', name: '(no workspace reported)' },
-        ]),
-      ]),
+      report([withWorkspaces([{ ...breakdown('anthropic', 3), id: 'ws_1', name: 'Platform' }])]),
       OPTIONS,
     );
-
-    expect(svg).toContain('data-panel="workspace-rank"');
-    expect(svg).toContain('Platform');
-    expect(svg).toContain('(no workspace reported)');
-    expect(svg).toContain('A &quot;project&quot; here is a platform workspace');
-    expect(svg).toContain('keeps its own row in that panel');
-  });
-
-  it('draws no project panel when no platform ever named a workspace', () => {
-    const svg = renderReportSvg(
-      report([
-        withWorkspaces([
-          { ...breakdown('ccusage', 4), id: '(unattributed)', name: '(no workspace reported)' },
-        ]),
-      ]),
-      OPTIONS,
-    );
-    // One bar saying "no workspace reported" answers nothing.
     expect(svg).not.toContain('data-panel="workspace-rank"');
   });
 
@@ -604,5 +553,16 @@ describe('project and concentration statistics', () => {
 
     expect(svg).toContain('90% of spend fell in the single busiest day');
     expect(svg).toContain('half of it in 1 of 2 active days');
+  });
+});
+
+describe('model display names', () => {
+  it('drops route prefixes and snapshot dates but keeps an agent tag', () => {
+    expect(displayModel('claude-opus-4-8')).toBe('Opus 4.8');
+    expect(displayModel('claude-haiku-4-5-20251001')).toBe('Haiku 4.5');
+    expect(displayModel('claude-3-5-sonnet-20241022')).toBe('Sonnet 3.5');
+    expect(displayModel('deepseek/deepseek-v4-flash-0731')).toBe('DeepSeek v4 flash');
+    expect(displayModel('z-ai/glm-5.2')).toBe('GLM 5.2');
+    expect(displayModel('[pi] minimax/minimax-m3')).toBe('[pi] MiniMax m3');
   });
 });
