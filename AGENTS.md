@@ -38,7 +38,8 @@ The rules below exist to make that impossible to do quietly.
    the source in a comment when it is not obvious, and date claims about what an API lacks.
 9. **One diagnostic per real problem, with a stable `code`.** Codes are greppable and
    effectively public API (`not-configured`, `group-by-reduced`, `cost-unattributed`,
-   `usage-api-unavailable`, `price-missing`, `timezone-approximation`, …). Reuse before
+   `costs-unavailable`, `names-unavailable`, `local-tool-unavailable`,
+   `model-id-canonicalized`, `price-missing`, `timezone-approximation`, …). Reuse before
    inventing.
 10. **Comments explain why, not what.** Especially: why a platform is queried the way it is,
     and which decisions are assumptions rather than documented behaviour.
@@ -57,7 +58,8 @@ The rules below exist to make that impossible to do quietly.
     so its caption states the window, the cost provenance, the price sources and every
     source that did not fully report. Soilytix visual language: white report surface, flat,
     hairline rules, Inter, Lime ink for the title and key rule, Mint as the one highlight,
-    the sequential ramp for ordered token classes, categorical accents for series. Vendor
+    the sequential ramp for ordered token classes, vendor brand colours opening the series
+    palette (then a spare black and the neutral charcoal). Vendor
     marks are original glyphs, never a vendor's logo, and a name that does not identify a
     vendor gets the neutral mark rather than a guess.
 
@@ -65,7 +67,10 @@ The rules below exist to make that impossible to do quietly.
 
 ```
 src/
+  index.ts          the public entry: the library surface `import 'aiusage'` resolves to
   types.ts          domain vocabulary: UsageRecord, CostRecord, capabilities, diagnostics
+  models.ts         canonical model identity (vendor prefix and snapshot date stripped)
+  version.ts        the package version, read from package.json at runtime
   config.ts         env → credentials + runtime knobs; no config framework
   dates.ts          windows, timezone-aware period keys, UTC-bucket reality
   money.ts          micro-USD arithmetic and exact proportional allocation
