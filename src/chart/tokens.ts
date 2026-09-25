@@ -35,10 +35,10 @@ export const TOKEN = {
 } as const;
 
 /**
- * Series colours: Mint first — the largest series carries the single Mint
- * highlight — then the categorical accents (level 350) and the neutral charcoal
- * role, ordered so adjacent series stay apart. Azure is deliberately absent: the
- * current system has no blue.
+ * Series colours: vendor brand colours first (OpenAI, Anthropic, Gemini, then
+ * further OpenAI shades and OpenRouter), then a spare black with no vendor claim
+ * and the neutral charcoal role. A vendor's first series takes its vendor colour;
+ * later series from the same vendor index into this list by sorted position.
  */
 export const SERIES_COLOURS = [
   '#19C37D', // OpenAI GPT
