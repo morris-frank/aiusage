@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { renderReportSvg } from '../src/chart/index.js';
 import {
   aggregateByDimension,
   aggregateByPeriod,
@@ -320,6 +321,100 @@ const LOCAL_RUNNER: CommandRunner = async () => ({
       },
     ],
   }),
+});
+
+/**
+ * Shaped like a real `ccusage daily --by-agent` day: Claude Code and Codex
+ * carry nearly all the spend, Antigravity ran the same Claude model for a
+ * sliver of it, and one day has no per-agent rows at all.
+ */
+const MIXED_AGENT_RUNNER: CommandRunner = async () => {
+  const model = (modelName: string, cost: number) => ({
+    modelName,
+    inputTokens: 1000,
+    outputTokens: 1000,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    cost,
+  });
+  return {
+    code: 0,
+    stderr: '',
+    stdout: JSON.stringify({
+      daily: [
+        {
+          period: '2026-07-25',
+          agent: 'all',
+          metadata: { agents: ['antigravity', 'claude', 'codex'] },
+          modelBreakdowns: [model('claude-opus-4-6', 4001.5), model('gpt-5.3', 20)],
+          agents: [
+            { agent: 'claude', modelBreakdowns: [model('claude-opus-4-6', 4000)] },
+            { agent: 'codex', modelBreakdowns: [model('gpt-5.3', 20)] },
+            { agent: 'antigravity', modelBreakdowns: [model('claude-opus-4-6', 1.5)] },
+          ],
+        },
+        {
+          period: '2026-07-24',
+          metadata: { agents: ['claude'] },
+          modelBreakdowns: [model('claude-opus-4-6', 3)],
+        },
+      ],
+    }),
+  };
+};
+
+describe('the top models panel over mixed-agent local rows', () => {
+  it('credits each agent with its own share of a shared model, and guesses none', async () => {
+    const { collection, costing } = await pipeline({ runner: MIXED_AGENT_RUNNER });
+    const splits = ['model', 'agent'] as const;
+    const periods = aggregateByPeriod(costing.records, {
+      granularity: 'daily',
+      timeZone: 'UTC',
+      range: RANGE,
+      splits,
+    });
+    const report = buildPeriodReport(periods, totalsOf(periods), collection, costing, {
+      granularity: 'daily',
+      range: RANGE,
+      timeZone: 'UTC',
+      splits,
+      includeCost: true,
+      generatedAt: NOW,
+      priceSources: ['litellm@test'],
+    });
+
+    const opus = report.daily
+      ?.find((row) => row.period === '2026-07-25')
+      ?.modelBreakdowns.find((model) => model.modelName === 'claude-opus-4-6');
+    expect(opus?.agentBreakdowns?.map((agent) => [agent.id, agent.cost])).toEqual(
+      expect.arrayContaining([
+        ['claude', 4000],
+        ['antigravity', 1.5],
+      ]),
+    );
+
+    const svg = renderReportSvg(report, { series: 'agent', includeCost: true });
+    const rank = /<g data-panel="model-rank">([\s\S]*?)<\/g>\s*<g data-panel/.exec(svg)?.[1] ?? svg;
+    // Claude Code's Opus is Claude's, Codex's GPT is Codex's — no merged row.
+    expect(rank).toContain('>Opus 4.6 · claude<');
+    expect(rank).toContain('>Opus 4.6 · antigravity<');
+    expect(rank).toContain('>GPT 5.3 · codex<');
+    expect(rank).not.toContain('†');
+    // The day without per-agent rows stays visibly unattributed.
+    expect(rank).toContain('>Opus 4.6 · agent unknown<');
+    // The ranking wears the top graph's colour for the agent.
+    const legend = (agent: string) =>
+      new RegExp(`<rect [^>]*fill="(#[0-9A-F]{6})"/>\\s*<text [^>]*>${agent}<`).exec(svg)?.[1];
+    const dot = (agent: string) =>
+      new RegExp(`Opus 4\\.6 · ${agent}</text></g>\\s*<circle [^>]*fill="(#[0-9A-F]{6})"`).exec(
+        rank,
+      )?.[1];
+    expect(dot('claude')).toBe(legend('claude'));
+    expect(dot('anthropic')).toBe(legend('anthropic'));
+    // Claude Code leads, so it takes the Anthropic red; the API a second colour.
+    expect(legend('claude')).toBe('#D97757');
+    expect(legend('anthropic')).not.toBe('#D97757');
+  });
 });
 
 describe('the whole pipeline over every source', () => {
