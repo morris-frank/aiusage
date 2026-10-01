@@ -175,6 +175,8 @@ already parsing ccusage output keeps working:
       "totalCost": 2.5,
       "totalTokens": 3700,
 
+      // Each modelBreakdowns entry also carries `agents` and `agentBreakdowns`
+      // (that model split by agent, same shape as the breakdowns below).
       // aiusage additions, present only for the splits you asked for:
       "apiKeyBreakdowns": [ /* { id, name, …tokens, cost, costSource, providers, models } */ ],
       "accountBreakdowns": [ /* … */ ]

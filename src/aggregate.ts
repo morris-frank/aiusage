@@ -59,6 +59,9 @@ export type Bucket = {
   /** Contributing agents (ccusage agent names, or the platform id). */
   agents: string[];
   recordCount: number;
+  /** Model buckets only: the same bucket split by agent, so a model run under
+   * several agents keeps each agent's share instead of only the merged total. */
+  byAgent?: Bucket[];
 };
 
 export type PeriodBucket = Bucket & {
@@ -236,18 +239,23 @@ export function aggregateByDimension(
   records: readonly CostedRecord[],
   dimension: SplitDimension,
 ): Bucket[] {
-  const groups = new Map<string, Accumulator>();
+  const groups = new Map<string, { accumulator: Accumulator; records: CostedRecord[] }>();
   for (const record of records) {
     const { key, label } = dimensionOf(record, dimension);
-    let accumulator = groups.get(key);
-    if (!accumulator) {
-      accumulator = newAccumulator(key, label);
-      groups.set(key, accumulator);
+    let group = groups.get(key);
+    if (!group) {
+      group = { accumulator: newAccumulator(key, label), records: [] };
+      groups.set(key, group);
     }
-    accumulate(accumulator, record);
+    accumulate(group.accumulator, record);
+    group.records.push(record);
   }
   return [...groups.values()]
-    .map(finalize)
+    .map(({ accumulator, records: groupRecords }) =>
+      dimension === 'model'
+        ? { ...finalize(accumulator), byAgent: aggregateByDimension(groupRecords, 'agent') }
+        : finalize(accumulator),
+    )
     .sort(
       (a, b) =>
         (b.costMicros ?? 0) - (a.costMicros ?? 0) ||

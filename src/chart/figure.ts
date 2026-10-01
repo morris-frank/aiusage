@@ -126,7 +126,10 @@ type Box = { top: number; bottom: number; left: number; right: number };
 /** One row of a dot chart: a named thing, ranked, marked by its vendor. */
 type RankedRow = {
   label: string;
+  /** The agent, shown beside the model when the model is ranked under several. */
+  agentLabel?: string;
   vendor: VendorId;
+  colour: string;
   value: number;
   agents: string[];
   /** This exact row's subject was run under more than one agent. */
@@ -135,7 +138,7 @@ type RankedRow = {
   isOther: boolean;
   /** Only set on the `isOther` row: how many subjects it folds in. */
   tailCount?: number;
-  /** This row is usage the platform reported without naming a principal. */
+  /** This row is usage whose agent was not reported (ccusage without per-agent rows). */
   unattributed?: boolean;
 };
 
@@ -174,7 +177,11 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const right = width - RIGHT_MARGIN;
   const series = buildSeries(rows, options);
   const measure: Measure = options.includeCost ? 'cost' : 'tokens';
-  const rankedModels = buildModelRanking(rows, measure);
+  // The ranking reuses the top graph's colour for an agent, so the two agree.
+  const agentColours = new Map(
+    options.series === 'agent' ? series.map((one) => [one.key, one.colour] as const) : [],
+  );
+  const rankedModels = buildModelRanking(rows, measure, agentColours);
   const panelRows = panelSpecs(report, options, rankedModels);
 
   const withHeader = options.header !== false;
@@ -355,7 +362,7 @@ function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[
         return {
           key: id,
           label: displayLabel,
-          colour: TOKEN.highlight,
+          colour: TOKEN.highlight as string,
           vendor,
           cost: entry.cost,
           tokens: entry.tokens,
@@ -376,15 +383,32 @@ function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[
           .slice(0, index)
           .filter((earlier) => earlier.vendor === entry.vendor).length;
 
-        return {
-          ...entry,
-          colour:
-            sameVendorIndex === 0
-              ? vendorColour(entry.vendor)
-              : (SERIES_COLOURS[index % SERIES_COLOURS.length] ?? TOKEN.highlight),
-        };
+        // A later series of the same vendor indexes into the palette, skipping
+        // colours earlier series already wear: at index 1 the palette slot is
+        // the Anthropic red, so `anthropic` behind `claude` would repeat it.
+        let colour = vendorColour(entry.vendor);
+        if (sameVendorIndex > 0) {
+          const worn = new Set(array.slice(0, index).map((earlier) => earlier.colour));
+          const offset = [...SERIES_COLOURS.keys()].find(
+            (step) => !worn.has(SERIES_COLOURS[(index + step) % SERIES_COLOURS.length] ?? ''),
+          );
+          colour =
+            SERIES_COLOURS[(index + (offset ?? 0)) % SERIES_COLOURS.length] ?? TOKEN.highlight;
+        }
+        entry.colour = colour;
+        return entry;
       })
   );
+}
+
+/** An agent's colour in the ranking: the top graph's when it has one. */
+function agentColour(
+  agent: string | null,
+  vendor: VendorId,
+  agentColours: ReadonlyMap<string, string>,
+): string {
+  const fromSeries = agent === null ? undefined : agentColours.get(agent);
+  return fromSeries ?? (vendor === 'other' ? TOKEN.subtle : vendorColour(vendor));
 }
 
 /**
@@ -392,41 +416,79 @@ function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[
  * regardless of `options.series` — `modelBreakdowns` is unconditional on every
  * row, so this reads directly off it rather than requiring `--split model`.
  *
- * Colour comes from the *agent* that ran the model (`vendorOf` applied to the
- * agent name, not the model name) — never the literal provider id `ccusage`,
- * which names the local-usage tool, not a billable endpoint; a remote
- * platform's own id (`openrouter`, `openai`, `anthropic`) already doubles as
- * its agent name. A model run under more than one agent has no single colour
- * to wear honestly, so it gets the neutral mark instead of picking one
- * arbitrarily; `captionLines` discloses which models that happened to.
+ * One row per model *and agent*: a model Claude Code, the Anthropic API and
+ * OpenRouter all ran is three rows, each credited to the agent whose usage it
+ * is (`agentBreakdowns`), not one merged row no agent can honestly wear.
+ * Colour comes from the agent (`vendorOf` applied to the agent name, not the
+ * model name), and takes the top graph's own colour for that agent when the
+ * series are agents, so one agent reads as one colour across the figure. Local
+ * rows ccusage could not attribute (agent `ccusage`, the tool, not an agent)
+ * stay a visibly unattributed row with the neutral mark — never guessed. Only
+ * a breakdown without `agentBreakdowns` falls back to one merged row, marked
+ * mixed when it had several agents; `captionLines` discloses those.
  */
-function buildModelRanking(rows: readonly ReportRow[], measure: Measure): RankedRow[] {
-  const found = new Map<string, { value: number; agents: Set<string> }>();
+function buildModelRanking(
+  rows: readonly ReportRow[],
+  measure: Measure,
+  agentColours: ReadonlyMap<string, string>,
+): RankedRow[] {
+  const found = new Map<string, { model: string; value: number; agents: Set<string> }>();
+  const add = (model: string, agent: string | null, value: number, agents: readonly string[]) => {
+    const key = `${model}\u0000${agent ?? ''}`;
+    const entry = found.get(key) ?? { model, value: 0, agents: new Set<string>() };
+    entry.value += value;
+    for (const one of agents) entry.agents.add(one);
+    found.set(key, entry);
+  };
 
   for (const row of rows) {
     for (const model of row.modelBreakdowns) {
-      const value = valueOfModel(model, measure);
-      const entry = found.get(model.modelName) ?? { value: 0, agents: new Set<string>() };
-      entry.value += value;
-      for (const agent of model.agents) entry.agents.add(agent);
-      found.set(model.modelName, entry);
+      if (model.agentBreakdowns) {
+        for (const agent of model.agentBreakdowns) {
+          add(model.modelName, agent.id, measureOf(agent, measure), [agent.id]);
+        }
+      } else {
+        const only = model.agents.length === 1 ? (model.agents[0] ?? null) : null;
+        add(model.modelName, only, valueOfModel(model, measure), model.agents);
+      }
     }
   }
 
-  const ranked: RankedRow[] = [...found.entries()]
-    .map(([label, entry]) => {
+  // A model shown under several agents names the agent on each of its rows.
+  const rowsPerModel = new Map<string, number>();
+  for (const entry of found.values()) {
+    rowsPerModel.set(entry.model, (rowsPerModel.get(entry.model) ?? 0) + 1);
+  }
+
+  const ranked: RankedRow[] = [...found.values()]
+    .map((entry): RankedRow => {
       const agents = [...entry.agents].sort();
       const mixedAgent = agents.length > 1;
+      const agent = mixedAgent ? null : (agents[0] ?? null);
+      const unattributed = !mixedAgent && (agent === null || agent === 'ccusage');
+      const vendor: VendorId = agent === null || unattributed ? 'other' : vendorOf(agent);
+      const named = (rowsPerModel.get(entry.model) ?? 0) > 1 && agent !== null;
       return {
-        label,
-        vendor: mixedAgent ? ('other' as VendorId) : vendorOf(agents[0] ?? ''),
+        label: entry.model,
+        ...(unattributed
+          ? { agentLabel: 'agent unknown', unattributed: true }
+          : named
+            ? { agentLabel: agent }
+            : {}),
+        vendor,
+        colour: unattributed ? TOKEN.subtle : agentColour(agent, vendor, agentColours),
         value: entry.value,
         agents,
         mixedAgent,
         isOther: false,
       };
     })
-    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+    .sort(
+      (a, b) =>
+        b.value - a.value ||
+        a.label.localeCompare(b.label) ||
+        (a.agentLabel ?? '').localeCompare(b.agentLabel ?? ''),
+    );
 
   if (ranked.length <= RANK_CAPACITY) return ranked;
 
@@ -435,6 +497,7 @@ function buildModelRanking(rows: readonly ReportRow[], measure: Measure): Ranked
   kept.push({
     label: `Other ${tail.length} models`,
     vendor: 'other',
+    colour: TOKEN.subtle,
     value: tail.reduce((sum, one) => sum + one.value, 0),
     agents: [...new Set(tail.flatMap((one) => one.agents))].sort(),
     mixedAgent: false,
@@ -709,13 +772,18 @@ function panelTitle(spec: Exclude<PanelSpec, { kind: 'tabs' }>, box: Box): strin
   // `options.series` and could be model, API key, or anything else) — so it
   // carries its own small key rather than relying on the legend above it.
   if (spec.kind === 'ranked') {
-    const agents = [...new Set(spec.rows.flatMap((row) => row.agents))].sort();
+    // Keyed off the rows themselves, so the key shows exactly the mark and
+    // colour each agent's rows wear.
+    const keyed = new Map<string, RankedRow>();
+    for (const row of spec.rows) {
+      if (row.isOther || row.mixedAgent) continue;
+      const name = row.unattributed ? 'agent unknown' : (row.agents[0] ?? '');
+      if (!keyed.has(name)) keyed.set(name, row);
+    }
     let x = box.left + 150;
-    for (const agent of agents) {
-      const vendor = vendorOf(agent);
-      const colour = vendorColour(vendor);
+    for (const [agent, row] of [...keyed.entries()].sort(([a], [b]) => a.localeCompare(b))) {
       parts.push(
-        vendorMark(vendor, x, box.top - 22, 10, colour),
+        vendorMark(row.vendor, x, box.top - 22, 10, row.colour),
         text(x + 14, box.top - 14, agent, { size: 10.5, fill: TOKEN.muted }),
       );
       x += 22 + labelWidth(agent);
@@ -963,11 +1031,12 @@ function rankedPanel(
 
   models.forEach((model, index) => {
     const y = box.top + index * RANK_ROW_HEIGHT + RANK_ROW_HEIGHT / 2;
-    const colour = model.vendor === 'other' ? TOKEN.subtle : vendorColour(model.vendor);
+    const colour = model.colour;
     // A superscript dagger, not a second line, so a mixed-agent model still
     // fits in one row height — the caption spells out what it means.
     const name = model.isOther ? model.label : displayModel(model.label);
-    const label = truncate(name, model.mixedAgent ? 27 : 30) + (model.mixedAgent ? ' †' : '');
+    const shown = model.agentLabel ? `${name} · ${model.agentLabel}` : name;
+    const label = truncate(shown, model.mixedAgent ? 27 : 30) + (model.mixedAgent ? ' †' : '');
 
     parts.push(
       vendorMark(model.vendor, axisLeft - 26, y - 6, 12, colour),

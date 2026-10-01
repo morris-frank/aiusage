@@ -54,6 +54,9 @@ export type ModelBreakdown = {
    * the literal provider id `ccusage`, which names the tool, not an agent. */
   agents: string[];
   requests: number | null;
+  /** aiusage addition: this model's usage split by agent, so a model several
+   * agents ran is not one merged figure no single agent can be credited with. */
+  agentBreakdowns?: DimensionBreakdown[];
 };
 
 export type DimensionBreakdown = {
@@ -276,6 +279,11 @@ function toModelBreakdown(bucket: Bucket, includeCost: boolean): ModelBreakdown 
   if (includeCost) {
     breakdown.cost = usd(bucket.costMicros);
     breakdown.costSource = bucket.costSource;
+  }
+  if (bucket.byAgent) {
+    breakdown.agentBreakdowns = bucket.byAgent.map((agent) =>
+      toDimensionBreakdown(agent, includeCost),
+    );
   }
   return breakdown;
 }

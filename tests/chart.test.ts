@@ -457,12 +457,14 @@ describe('report figure', () => {
     expect(svg).toContain('groups the 2 lowest-total models as &quot;Other 2 models&quot;');
   });
 
-  it('marks a model run under more than one agent with the neutral ring, not either colour', () => {
+  it('marks a merged model with no per-agent split with the neutral ring, not either colour', () => {
     const svg = renderReportSvg(
       report([
         row('2026-07-25', { openrouter: 2, anthropic: 1 }, [
-          modelBreakdown('anthropic/claude-haiku-4.5', 'openrouter', 2),
-          modelBreakdown('anthropic/claude-haiku-4.5', 'anthropic', 1),
+          modelBreakdown('anthropic/claude-haiku-4.5', 'anthropic,openrouter', 3, 1000, [
+            'anthropic',
+            'openrouter',
+          ]),
           modelBreakdown('gpt-4o-mini-2024-07-18', 'openai', 1),
         ]),
       ]),
