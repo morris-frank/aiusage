@@ -94,9 +94,13 @@ h2 + .note { margin: 0 0 14px; }
 .card .label { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
                color: var(--muted); }
 .card .value { font-size: 27px; font-weight: 300; color: var(--ink); line-height: 1.25;
-               font-variant-numeric: tabular-nums; margin-top: 4px; }
+               font-variant-numeric: tabular-nums; margin-top: 4px;
+               display: flex; align-items: center; gap: 10px; }
 .card .value.primary { color: var(--mint-ink); }
 .card .sub { font-size: 11.5px; color: var(--subtle); }
+.card .glyph { width: 22px; height: 22px; flex: none; }
+.share { flex: 1; height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
+.share span { display: block; height: 100%; background: var(--mint); }
 
 table { width: 100%; border-collapse: collapse; font-size: 12.5px;
         font-variant-numeric: tabular-nums; }
@@ -229,10 +233,19 @@ function headerBlock(report: PeriodReport, options: ChartOptions): string {
 }
 
 function cards(report: PeriodReport, options: ChartOptions): string {
-  const cacheRead = report.totals.cacheReadTokens;
-  const share = report.totals.totalTokens > 0 ? (cacheRead / report.totals.totalTokens) * 100 : 0;
+  const { inputTokens, cacheCreationTokens, cacheReadTokens } = report.totals;
+  // Cache reads are compared with the rest of the input side (uncached input and
+  // cache writes); output is a different question and would dilute the share.
+  const inputSide = inputTokens + cacheCreationTokens + cacheReadTokens;
+  const cacheShare = inputSide > 0 ? cacheReadTokens / inputSide : null;
 
-  const entries: { label: string; value: string; sub: string; primary?: boolean }[] = [
+  const entries: {
+    label: string;
+    value: string;
+    sub: string;
+    primary?: boolean;
+    graphic?: string;
+  }[] = [
     {
       label: 'Total cost',
       value: options.includeCost
@@ -247,47 +260,63 @@ function cards(report: PeriodReport, options: ChartOptions): string {
       value: compactTokens(report.totals.totalTokens),
       sub: `${report.totals.totalTokens.toLocaleString('en-US')} across all classes`,
     },
-    {
-      label: 'Cache reads',
-      value: `${share.toFixed(0)}%`,
-      sub: 'of all tokens read from cache',
-    },
+    // With no input tokens there is no share to draw; a 0% would read as measured.
+    cacheShare === null
+      ? { label: 'Cache reads', value: '—', sub: 'no input tokens reported' }
+      : {
+          label: 'Cache reads',
+          value: `${(cacheShare * 100).toFixed(0)}%`,
+          sub: 'of input tokens read from cache',
+          graphic: cachePie(cacheShare),
+        },
   ];
 
-  // Both derived statistics are absent when the collected grain cannot support
-  // them, and a card is only shown when its number exists — an empty card would
-  // read as a measured zero.
-  const timeOfDay = report.statistics.timeOfDay;
-  if (timeOfDay && timeOfDay.peakHour !== null) {
-    const peak = timeOfDay.hours.find((hour) => hour.hour === timeOfDay.peakHour);
-    entries.push({
-      label: 'Busiest hour',
-      value: `${String(timeOfDay.peakHour).padStart(2, '0')}:00`,
-      sub: `${report.meta.timezone}, over ${peak?.activeDays ?? 0} ${
-        (peak?.activeDays ?? 0) === 1 ? 'day' : 'days'
-      } · ${timeOfDay.sources.join(', ')} only`,
-    });
-  }
+  // Concentration is absent when no period carries the measure, and means nothing
+  // over a single period; the card then says so rather than showing a number.
   const concentration = report.statistics.concentration;
-  if (concentration && concentration.activePeriods > 1) {
-    entries.push({
-      label: 'Concentration',
-      value: `${(concentration.topDecileShare * 100).toFixed(0)}%`,
-      sub: `of ${concentration.measure} in the busiest ${concentration.topDecilePeriods} of ${concentration.activePeriods} ${periodNoun(report, true).toLowerCase()}`,
-    });
-  }
+  entries.push(
+    concentration && concentration.activePeriods > 1
+      ? {
+          label: 'Concentration',
+          value: `${(concentration.topDecileShare * 100).toFixed(0)}%`,
+          sub: `of ${concentration.measure} in the busiest ${concentration.topDecilePeriods} of ${concentration.activePeriods} ${periodNoun(report, true).toLowerCase()}`,
+          graphic: shareBar(concentration.topDecileShare),
+        }
+      : {
+          label: 'Concentration',
+          value: '—',
+          sub: `not computed: needs more than one ${periodNoun(report, false).toLowerCase()} with usage`,
+        },
+  );
 
   return `<div class="cards">
 ${entries
   .map(
     (entry) => `  <div class="card">
     <div class="label">${escapeXml(entry.label)}</div>
-    <div class="value${entry.primary ? ' primary' : ''}">${escapeXml(entry.value)}</div>
+    <div class="value${entry.primary ? ' primary' : ''}">${escapeXml(entry.value)}${entry.graphic ?? ''}</div>
     <div class="sub">${escapeXml(entry.sub)}</div>
   </div>`,
   )
   .join('\n')}
 </div>`;
+}
+
+/** A two-slice pie: cache reads against the other input, in the token-class ramp. */
+function cachePie(share: number): string {
+  const [input, , , cacheRead] = TOKEN_CLASSES;
+  const pct = (share * 100).toFixed(1);
+  // A circle stroked as wide as its diameter draws a pie slice of `pct` per 100.
+  return `<svg class="glyph" viewBox="0 0 20 20" width="22" height="22" role="img" aria-label="${pct}% cache reads">
+<circle cx="10" cy="10" r="10" fill="${input.colour}"/>
+<circle cx="10" cy="10" r="5" fill="none" stroke="${cacheRead.colour}" stroke-width="10" pathLength="100" stroke-dasharray="${pct} 100" transform="rotate(-90 10 10)"/>
+</svg>`;
+}
+
+/** The busiest tenth's share as a filled bar on a full-width track. */
+function shareBar(share: number): string {
+  const pct = (share * 100).toFixed(1);
+  return `<span class="share" role="img" aria-label="${pct}% share"><span style="width:${pct}%"></span></span>`;
 }
 
 function periodTable(

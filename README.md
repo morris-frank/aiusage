@@ -261,7 +261,7 @@ matter what is asked, and say so in `capabilities.hourly`.
 
 ## Derived statistics
 
-`statistics` in the JSON, and two summary cards in the report, answer
+`statistics` in the JSON, and the report's Concentration card, answer
 questions the time series cannot. Both are *shape*, never a total, and both are null when the
 collected grain cannot support them.
 
@@ -297,7 +297,7 @@ Computed from the same period rows the figure draws, so every source is included
 
 There is no hour-of-day panel: whole-day sources are excluded from that statistic (see
 [Derived statistics](#derived-statistics)), so on a mixed run it would draw a sliver of the
-spend as the day's shape. The statistic stays in the JSON and the page's summary strip.
+spend as the day's shape. The statistic stays in the JSON only.
 
 With `--no-cost` the cost panels are dropped, and the token panels take both the
 composition and the accumulation. Each series carries a vendor mark as well
