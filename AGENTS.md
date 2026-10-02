@@ -60,8 +60,9 @@ The rules below exist to make that impossible to do quietly.
     hairline rules, Inter, Lime ink for the title and key rule, Mint as the one highlight,
     the sequential ramp for ordered token classes, vendor brand colours opening the series
     palette (then a spare black and the neutral charcoal). Vendor
-    marks are original glyphs, never a vendor's logo, and a name that does not identify a
-    vendor gets the neutral mark rather than a guess.
+    marks are the vendor's own logo, inlined as SVG (LobeHub's MIT set, source and licence
+    in `brand/vendor-marks/`) and drawn in the palette's colour, and a name that does not
+    identify a vendor gets the neutral mark rather than a guess.
 
 ## Layout
 

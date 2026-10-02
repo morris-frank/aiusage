@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
-import { displayModel } from '../src/chart/tokens.js';
+import { displayModel, vendorOf } from '../src/chart/tokens.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../src/report.js';
 import type { TimeOfDayStatistics } from '../src/statistics.js';
 
@@ -172,15 +172,30 @@ describe('report figure', () => {
     expect(svg).toContain('data-panel="token-mix"');
   });
 
-  it('marks each series with a vendor glyph, and stays neutral when the name says nothing', () => {
+  it('marks each series with its vendor logo, and stays neutral when the name says nothing', () => {
     const svg = renderReportSvg(
       report([row('2026-07-25', { anthropic: 3, 'some-key-7f2': 1 })]),
       OPTIONS,
     );
-    // Anthropic's mark is an SVG path; an unidentifiable series gets the ring,
-    // rather than a mark that would claim a vendor the name does not name.
-    expect(svg).toMatch(/<path d="M/);
+    // Anthropic wears its own logo inline; an unidentifiable series gets the
+    // ring, rather than a mark that would claim a vendor the name does not name.
+    expect(svg).toContain('<g data-mark="anthropic"');
     expect(svg).toMatch(/<circle cx="[\d.]+" cy="[\d.]+" r="[\d.]+" fill="none"/);
+  });
+
+  it('names a vendor only on evidence, and tells Gemini the product from Google Cloud', () => {
+    expect(vendorOf('claude')).toBe('claudecode'); // ccusage's id for Claude Code
+    expect(vendorOf('claude-opus-4-6')).toBe('claude');
+    expect(vendorOf('anthropic/claude-opus-4-6')).toBe('claude');
+    expect(vendorOf('anthropic')).toBe('anthropic');
+    expect(vendorOf('codex')).toBe('openai');
+    expect(vendorOf('pi')).toBe('pi');
+    expect(vendorOf('antigravity')).toBe('antigravity');
+    expect(vendorOf('gemini-2.5-pro')).toBe('gemini');
+    expect(vendorOf('vertex')).toBe('googlecloud');
+    // A bare author prefix says nothing about who ran the request.
+    expect(vendorOf('google')).toBe('other');
+    expect(vendorOf('pipeline-key')).toBe('other');
   });
 
   it('carries its own provenance so the figure cannot be over-read alone', () => {
@@ -301,6 +316,27 @@ describe('report figure', () => {
     // Vendor marks travel with the row, and models are chips rather than prose.
     expect(html).toContain('class="marks"');
     expect(html).toContain('title="some-model">Some model<');
+  });
+
+  it('embeds every harness and platform logo in the page, so it needs no network', () => {
+    const html = renderReportHtml(
+      report([
+        row('2026-07-25', {
+          claude: 1,
+          codex: 1,
+          pi: 1,
+          antigravity: 1,
+          anthropic: 1,
+          openrouter: 1,
+          'some-key-7f2': 1,
+        }),
+      ]),
+      OPTIONS,
+    );
+    for (const mark of ['claudecode', 'openai', 'pi', 'antigravity', 'anthropic', 'openrouter']) {
+      expect(html).toContain(`<g data-mark="${mark}"`);
+    }
+    expect(html).not.toMatch(/<(img|use|image)\b[^>]*(src|href)=/);
   });
 
   it('draws cache reads as a pie of the input side and concentration as a share bar', () => {

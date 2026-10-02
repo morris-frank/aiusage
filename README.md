@@ -301,8 +301,9 @@ spend as the day's shape. The statistic stays in the JSON only.
 
 With `--no-cost` the cost panels are dropped, and the token panels take both the
 composition and the accumulation. Each series carries a vendor mark as well
-as a colour, so no series depends on hue alone; the marks are original glyphs, distinct from
-vendor logos, and a name that does not identify a vendor gets a neutral one.
+as a colour, so no series depends on hue alone; the marks are the vendors' own logos, inlined
+from LobeHub's MIT-licensed icon set (see [`brand/vendor-marks/`](brand/vendor-marks/)), and
+a name that does not identify a vendor gets a neutral one.
 
 Output is a self-contained SVG (no fonts, no scripts, no network), or a printable white page
 with `--format html`, which adds a summary strip, the period table with a cost bar and a

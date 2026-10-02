@@ -38,6 +38,7 @@
     "test": "tests"
   },
   "files": [
+    "brand/vendor-marks",
     "dist",
     "src"
   ],

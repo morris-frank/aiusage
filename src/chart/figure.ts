@@ -349,12 +349,12 @@ function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[
     [...found.entries()]
       .map(([id, entry]) => {
         const vendor = markFor(id, entry.models);
-        // Strip the vendor prefix (e.g. "openai/", "anthropic/") from the label
-        // if it matches the identified vendor, since the icon carries that information.
+        // Strip a vendor prefix (e.g. "openai/", "anthropic/") from the label once
+        // the series wears a vendor's mark, since the icon carries that information.
         let displayLabel = entry.label;
-        if (displayLabel.includes('/')) {
+        if (displayLabel.includes('/') && vendor !== 'other') {
           const parts = displayLabel.split('/');
-          if (vendorOf(parts[0] ?? '') === vendor) {
+          if (vendorOf(parts[0] ?? '') !== 'other') {
             displayLabel = parts.slice(1).join('/');
           }
         }
@@ -378,10 +378,11 @@ function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[
           : b.tokenTotal - a.tokenTotal || a.key.localeCompare(b.key),
       )
       .map((entry, index, array) => {
-        // Find how many earlier series in the sorted list share the same vendor
+        // Find how many earlier series in the sorted list share the vendor colour
+        // (Claude Code, Claude and Anthropic wear different marks but one red).
         const sameVendorIndex = array
           .slice(0, index)
-          .filter((earlier) => earlier.vendor === entry.vendor).length;
+          .filter((earlier) => vendorColour(earlier.vendor) === vendorColour(entry.vendor)).length;
 
         // A later series of the same vendor indexes into the palette, skipping
         // colours earlier series already wear: at index 1 the palette slot is
