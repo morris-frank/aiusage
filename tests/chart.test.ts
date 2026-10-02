@@ -303,6 +303,50 @@ describe('report figure', () => {
     expect(html).toContain('title="some-model">Some model<');
   });
 
+  it('draws cache reads as a pie of the input side and concentration as a share bar', () => {
+    const data = report(
+      [row('2026-07-24', { anthropic: 1 }), row('2026-07-25', { anthropic: 9 })],
+      {},
+      {
+        timeOfDay: timeOfDay({ 9: 6, 22: 3 }),
+        concentration: {
+          unit: 'daily',
+          measure: 'cost',
+          activePeriods: 2,
+          topShare: 0.9,
+          periodsForHalf: 1,
+          topDecileShare: 0.9,
+          topDecilePeriods: 1,
+        },
+      },
+    );
+    data.totals = {
+      ...data.totals,
+      inputTokens: 1000,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 3000,
+    };
+    const html = renderReportHtml(data, OPTIONS);
+    // The hour statistic stays in the JSON; on a mixed run a card would show a sliver as the day.
+    expect(html).not.toContain('Busiest hour');
+    // 3000 cache reads against 1000 other input: three quarters of the input side.
+    expect(html).toContain('>75%<svg class="glyph"');
+    expect(html).toContain('stroke-dasharray="75.0 100"');
+    expect(html).toContain(
+      'class="share" role="img" aria-label="90.0% share"><span style="width:90.0%">',
+    );
+  });
+
+  it('says a card statistic is absent instead of drawing a zero', () => {
+    const data = report([row('2026-07-25', { anthropic: 2 })]);
+    data.totals = { ...data.totals, inputTokens: 0, totalTokens: 0 };
+    const html = renderReportHtml(data, OPTIONS);
+    expect(html).toContain('no input tokens reported');
+    expect(html).toContain('not computed: needs more than one day with usage');
+    expect(html).not.toContain('class="glyph"');
+    expect(html).not.toContain('class="share"');
+  });
+
   it('lists every source with what it actually answered', () => {
     const html = renderReportHtml(
       report([row('2026-07-25', { anthropic: 2 })], {
