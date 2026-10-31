@@ -53,6 +53,7 @@ import type {
   ProviderResult,
   UsageRecord,
 } from '../types.js';
+import { mergeWithLedger } from './ledger.js';
 import type { CollectContext, Provider } from './types.js';
 
 /**
@@ -213,7 +214,14 @@ async function collect(
     };
   }
 
-  const { records, agents, undatedRows } = toRecords(payload, context);
+  const parsed = toRecords(payload, context);
+  const { agents, undatedRows } = parsed;
+  let records = parsed.records;
+  if (config.ledger) {
+    const merged = await mergeWithLedger(config.ledger, records, context);
+    records = merged.records;
+    diagnostics.push(...merged.diagnostics);
+  }
   if (undatedRows > 0) {
     diagnostics.push({
       provider: 'ccusage',

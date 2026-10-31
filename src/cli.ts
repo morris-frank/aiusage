@@ -213,6 +213,7 @@ export async function run(environment: CliEnvironment): Promise<number> {
           command: config.ccusageCommand,
           offline: options.offline,
           timeoutMs: config.ccusageTimeoutMs,
+          ledger: config.localLedger,
         }
       : null,
     ...(environment.runCommand ? { localRunner: environment.runCommand } : {}),

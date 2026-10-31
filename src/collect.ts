@@ -9,11 +9,13 @@
  */
 
 import {
+  type BilledVia,
   CREDENTIAL_ENV_VARS,
   configuredProviders,
   type LocalSourceConfig,
   type RuntimeConfig,
 } from './config.js';
+import { addDays, dayStartUtc, toDateString } from './dates.js';
 import { HttpClient } from './http.js';
 import type { CommandRunner } from './providers/ccusage.js';
 import { localOverlapDiagnostic } from './providers/ccusage.js';
@@ -91,8 +93,73 @@ export async function collectUsage(options: CollectOptions): Promise<Collection>
     results.push(found ?? skippedResult(id, configured.has(id)));
   }
 
+  removeBilledLocalUsage(results, options.config.localBilledVia, now);
+  attributeBilledAgents(results, options.config.localBilledVia);
   warnAboutLocalOverlap(results);
   return { results, diagnostics: results.flatMap((result) => result.diagnostics) };
+}
+
+/**
+ * An agent the operator declared billed through a platform is in that
+ * platform's rows already — its local rows are the same traffic seen twice, and
+ * the platform's are the billed ones. They are dropped only when that platform
+ * actually reported in this run, and only for days inside its lookback: before
+ * that, the local rows are all there is.
+ */
+function removeBilledLocalUsage(
+  results: readonly ProviderResult[],
+  billedVia: ReadonlyMap<string, BilledVia>,
+  now: Date,
+): void {
+  const local = results.find((result) => isLocalProvider(result.provider));
+  if (!local || billedVia.size === 0) return;
+
+  const removed = new Map<string, { platform: ProviderId; tokens: number }>();
+  local.records = local.records.filter((record) => {
+    const agent = record.tags.agent;
+    const platform = agent === undefined ? undefined : billedVia.get(agent)?.platform;
+    if (!agent || !platform) return true;
+    const billed = results.find((result) => result.provider === platform);
+    if (!billed || billed.records.length === 0) return true;
+    const lookback = billed.capabilities.maxLookbackDays;
+    if (
+      lookback !== null &&
+      record.bucketStart < dayStartUtc(addDays(toDateString(now), -lookback)).toISOString()
+    ) {
+      return true;
+    }
+    const { input, output, cacheCreation, cacheRead } = record.tokens;
+    const tokens = (removed.get(agent)?.tokens ?? 0) + input + output + cacheCreation + cacheRead;
+    removed.set(agent, { platform, tokens });
+    return false;
+  });
+  for (const [agent, { platform, tokens }] of removed) {
+    local.diagnostics.push({
+      provider: local.provider,
+      level: 'info',
+      code: 'local-overlap-removed',
+      message: `${tokens} local ${agent} tokens are left out: AIUSAGE_LOCAL_BILLED_VIA says ${agent} is billed through ${PROVIDER_LABELS[platform]}, whose rows already count them.`,
+    });
+  }
+}
+
+/**
+ * The platform rows that replaced an agent's local rows still belong to that
+ * agent: rows on the API key the operator named for it are tagged with it, so
+ * the agent split shows `pi` rather than the platform that billed it.
+ */
+function attributeBilledAgents(
+  results: readonly ProviderResult[],
+  billedVia: ReadonlyMap<string, BilledVia>,
+): void {
+  for (const [agent, { platform, apiKeyName }] of billedVia) {
+    if (apiKeyName === null) continue;
+    for (const record of results.find((result) => result.provider === platform)?.records ?? []) {
+      if (record.apiKey?.name !== apiKeyName) continue;
+      record.tags.agent = agent;
+      record.tags.agentAttribution = 'operator-mapped-key';
+    }
+  }
 }
 
 /**

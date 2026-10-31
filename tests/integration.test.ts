@@ -50,6 +50,8 @@ const CONFIG: RuntimeConfig = {
   secrets: ['sk-admin-key', 'sk-ant-admin01-key'],
   ccusageCommand: null,
   ccusageTimeoutMs: 120_000,
+  localBilledVia: new Map(),
+  localLedger: null,
 };
 
 const ROUTES: StubRoute[] = [
@@ -280,14 +282,19 @@ const PRICE_BOOK = (() => {
   });
 })();
 
-async function pipeline(local?: { runner: CommandRunner }, routes: StubRoute[] = ROUTES) {
+async function pipeline(
+  local?: { runner: CommandRunner },
+  routes: StubRoute[] = ROUTES,
+  config: RuntimeConfig = CONFIG,
+  now: Date = NOW,
+) {
   const { http } = stubClient(routes);
   const collection = await collectUsage({
-    config: CONFIG,
+    config,
     range: RANGE,
     timeZone: 'UTC',
     http,
-    now: NOW,
+    now,
     local: local ? { command: ['ccusage'], offline: true, timeoutMs: 1000 } : null,
     ...(local ? { localRunner: local.runner } : {}),
   });
@@ -586,6 +593,41 @@ describe('the whole pipeline over every source', () => {
       now: NOW,
     });
     expect(collection.results.map((result) => result.provider)).toEqual(['anthropic']);
+  });
+
+  it('leaves out a local agent billed through a platform that reported, and says how much', async () => {
+    const config = {
+      ...CONFIG,
+      localBilledVia: new Map([
+        ['codex', { platform: 'openrouter' as const, apiKeyName: 'Agents key' }],
+      ]),
+    };
+    const { collection } = await pipeline({ runner: MIXED_AGENT_RUNNER }, ROUTES, config);
+
+    const local = collection.results.find((result) => result.provider === 'ccusage');
+    const agents = new Set(local?.records.map((record) => record.tags.agent));
+    // Codex's rows are OpenRouter's rows seen again; the other agents stay.
+    expect(agents.has('codex')).toBe(false);
+    expect(agents.has('claude')).toBe(true);
+    expect(local?.diagnostics.find((d) => d.code === 'local-overlap-removed')?.message).toMatch(
+      /^2000 local codex tokens/,
+    );
+    // …and the OpenRouter rows on the key named for codex are codex's, not OpenRouter's.
+    const billed = collection.results.find((result) => result.provider === 'openrouter');
+    const onKey = billed?.records.filter((record) => record.apiKey?.name === 'Agents key') ?? [];
+    expect(onKey.length).toBeGreaterThan(0);
+    expect(onKey.every((record) => record.tags.agent === 'codex')).toBe(true);
+
+    // Once those days are past OpenRouter's 30-day lookback, it no longer holds
+    // them, so the local rows are all there is and stay in.
+    const later = await pipeline(
+      { runner: MIXED_AGENT_RUNNER },
+      ROUTES,
+      config,
+      new Date('2026-09-30T12:00:00Z'),
+    );
+    const kept = later.collection.results.find((result) => result.provider === 'ccusage');
+    expect(kept?.records.some((record) => record.tags.agent === 'codex')).toBe(true);
   });
 
   it('fuses local agent rows in, and warns that they may be the same traffic twice', async () => {

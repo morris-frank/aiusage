@@ -61,7 +61,11 @@ workspace (or a comma-separated list in one variable). The label names that work
 reports when the key sees exactly one, tagged `workspaceNameSource: "credential-label"`,
 because OpenRouter has no workspace-name API. Every key is verified with
 `GET /api/v1/key` first, so a management key pasted into `OPENROUTER_API_KEY` is still used
-as one, and a key visible to two management keys is collected once.
+as one, and a key visible to two management keys is collected once. Each workspace's
+total is its management key's own unfiltered activity: whatever its listed keys do not
+account for (a deleted key, or use outside one) is reported under the workspace with no
+key (`tags.apiKeyAttribution: "no-listed-key"`, notice `activity-without-key`), and two
+management keys on one workspace read it once.
 
 **Local agents (`--local`).** [ccusage](https://github.com/ryoppippi/ccusage) reads the
 coding agents' own logs on this machine and prices them itself. `aiusage --local` runs it
@@ -70,7 +74,21 @@ this changes, both stated on every run: its cost is labelled `imported`
 (see below), distinct from `reported`, and an agent billed through an API key is also inside
 that platform's total, so the fused number can count the same traffic twice.
 `local-overlap-possible` says so whenever both are present. Subscription-billed agents
-(Claude Max, Codex plans) do not overlap.
+(Claude Max, Codex plans) do not overlap. Where you know an agent is billed through a
+platform, say so with `AIUSAGE_LOCAL_BILLED_VIA=pi:openrouter:<key name>`: its local rows are
+left out for the days that platform covers (`local-overlap-removed` states how many tokens),
+and the platform's rows on that API key are attributed to the agent
+(`tags.agentAttribution: "operator-mapped-key"`). The key name is optional.
+ccusage reads Claude Code from `CLAUDE_CONFIG_DIR` (comma-separated for several accounts).
+
+Agent logs are not permanent: Claude Code deletes transcripts after `cleanupPeriodDays`
+(30 by default), and a day's local usage shrinks in every later run. Set
+`AIUSAGE_LOCAL_LEDGER` to a file and every local row ccusage reports is kept there; a run
+reports whichever of the live row and the ledger row holds more tokens, so local totals
+only go up. Rows taken from the ledger carry `tags.source: "ccusage-ledger"` and the
+`local-ledger-used` notice states how many tokens they add. A ledger row may carry a
+`note` (surfaced as `tags.ledgerNote`) when it was restored by hand rather than written by
+a run.
 
 ccusage collection deliberately uses `daily` rather than `session`: `session` also exposes
 which project a session ran in, but its bucketing is coarser (a session's tokens land
@@ -100,6 +118,8 @@ without credentials is **skipped and said so**.
 | `ANTHROPIC_ADMIN_KEY` | Claude | Admin API key (`sk-ant-admin…`) or org OAuth token. |
 | `AIUSAGE_CCUSAGE_CMD` | Local | How to run ccusage for `--local`; discovered otherwise. |
 | `AIUSAGE_CCUSAGE_TIMEOUT_MS` | Local | Timeout for that subprocess (default 120000). |
+| `AIUSAGE_LOCAL_LEDGER` | Local | File that keeps every local row seen, so deleted agent logs never shrink a total. |
+| `AIUSAGE_LOCAL_BILLED_VIA` | Local | `agent:platform[:key name],…` — local agents a platform already bills; their local rows are dropped and that key's rows credited to the agent. |
 | `AIUSAGE_REPORT_DIR` | — | Where `report` saves its figure; the working directory otherwise. |
 
 OpenAI and Anthropic remain one credential each: their admin keys are org-scoped, and

@@ -92,4 +92,19 @@ describe('local source configuration', () => {
     expect(loadConfig({ AIUSAGE_TIMEOUT_MS: '5000' }).ccusageTimeoutMs).toBe(120_000);
     expect(loadConfig({ AIUSAGE_CCUSAGE_TIMEOUT_MS: '300000' }).ccusageTimeoutMs).toBe(300_000);
   });
+
+  it('reads which local agents a platform bills, and refuses a platform it does not know', () => {
+    expect(
+      loadConfig({ AIUSAGE_LOCAL_BILLED_VIA: 'pi:openrouter:pie, aider:anthropic' }).localBilledVia,
+    ).toEqual(
+      new Map([
+        ['pi', { platform: 'openrouter', apiKeyName: 'pie' }],
+        ['aider', { platform: 'anthropic', apiKeyName: null }],
+      ]),
+    );
+    // A typo must not quietly keep the double count it was meant to remove.
+    expect(() => loadConfig({ AIUSAGE_LOCAL_BILLED_VIA: 'pi:open-router' })).toThrow(
+      /AIUSAGE_LOCAL_BILLED_VIA/,
+    );
+  });
 });

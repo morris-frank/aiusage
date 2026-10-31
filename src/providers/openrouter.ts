@@ -11,6 +11,13 @@
  *   - management key → `GET /api/v1/keys`, then one activity call per key hash,
  *     which is the only grain OpenRouter will attribute activity at.
  *
+ * The per-key calls do not add up to the workspace: activity on a deleted key,
+ * or on no key at all, is in the management key's own unfiltered `/activity`
+ * and on no listed hash (observed 2026-10-31: 151M tokens for the workspace
+ * against 93M across its 49 keys). So each workspace is read once unfiltered
+ * as well, and what no key accounts for is reported under the workspace with
+ * no key — the total is the platform's, the split is as fine as it allows.
+ *
  * A management key is scoped to **one workspace**, so credentials are a list:
  * one key per workspace (`OPENROUTER_MANAGEMENT_KEY_<LABEL>`). Every key is
  * probed with `GET /api/v1/key` first, because which env var a key was pasted
@@ -25,7 +32,7 @@ import { mapWithConcurrency } from '../concurrency.js';
 import type { OpenRouterCredentials, OpenRouterKey } from '../config.js';
 import { addDays, dayEndUtc, dayStartUtc, toDateString } from '../dates.js';
 import { HttpError } from '../http.js';
-import { usdToMicros } from '../money.js';
+import { microsToUsd, usdToMicros } from '../money.js';
 import type {
   Diagnostic,
   Principal,
@@ -75,8 +82,9 @@ type KeysResponse = { data?: KeyRow[] };
 
 /**
  * `GET /api/v1/key` describes the calling key itself. `is_management_key` /
- * `is_provisioning_key` were observed on 2026-07-26; both are treated as
- * optional, and their absence leaves the env var's claim standing.
+ * `is_provisioning_key` were observed on 2026-07-26 and `workspace_id` on
+ * 2026-10-31; all are treated as optional, and the absence of the first two
+ * leaves the env var's claim standing.
  */
 type KeyProbeResponse = {
   data?: {
@@ -84,6 +92,7 @@ type KeyProbeResponse = {
     is_management_key?: boolean;
     is_provisioning_key?: boolean;
     limit_remaining?: number | null;
+    workspace_id?: string | null;
   };
 };
 
@@ -116,6 +125,7 @@ type Probed = {
   kind: 'management' | 'inference';
   /** Masked key label, when the probe returned one. */
   maskedLabel: string | null;
+  workspaceId: string | null;
 };
 
 async function collect(
@@ -166,31 +176,45 @@ async function collect(
   }
 
   const enumerated = await enumerateKeys(context, usable, diagnostics);
-  const workspaceNames = nameWorkspacesFromLabels(enumerated);
+  const workspaceNames = nameWorkspacesFromLabels(usable, enumerated);
 
   const perKey = await mapWithConcurrency(enumerated, context.concurrency, (entry) =>
     collectKeyActivity(context, entry, workspaceNames),
   );
 
-  // An inference credential whose key a management credential already enumerated
-  // would be counted twice, so it only makes its own call when it is unseen. A
-  // management credential that enumerated nothing (refused, or an empty
-  // workspace) falls back to its own activity rather than contributing nothing.
+  // One unfiltered read per workspace: two management keys scoped to the same
+  // workspace would otherwise add its total twice.
+  const workspaces = new Map<string, Probed>();
+  for (const probe of usable) {
+    if (probe.kind !== 'management') continue;
+    const scope = workspaceScope(probe);
+    if (!workspaces.has(scope)) workspaces.set(scope, probe);
+  }
+  const keyed = new Map<string, UsageRecord[]>();
+  enumerated.forEach((entry, index) => {
+    // A management key is scoped to one workspace, so every key it listed is in it.
+    const scope = workspaceScope(entry.via);
+    keyed.set(scope, [...(keyed.get(scope) ?? []), ...(perKey[index]?.records ?? [])]);
+  });
+  const remainders = await mapWithConcurrency(
+    [...workspaces.entries()],
+    context.concurrency,
+    ([scope, probe]) =>
+      collectWorkspaceRemainder(context, probe, keyed.get(scope) ?? [], workspaceNames),
+  );
+
+  // An inference key inside a workspace read above, or one a management key
+  // enumerated, is already counted; only an unseen one makes its own call.
   const enumeratedLabels = new Set(
     enumerated.map((entry) => entry.row.label).filter((label): label is string => Boolean(label)),
   );
-  const enumeratedVia = new Set(enumerated.map((entry) => entry.via.credential.label));
   const inference = usable.filter((probe) => probe.kind === 'inference');
-  const standalone = [
-    ...inference.filter(
-      (probe) => !(probe.maskedLabel !== null && enumeratedLabels.has(probe.maskedLabel)),
-    ),
-    ...usable.filter(
-      (probe) => probe.kind === 'management' && !enumeratedVia.has(probe.credential.label),
-    ),
-  ];
-  const covered =
-    inference.length - standalone.filter((probe) => probe.kind === 'inference').length;
+  const standalone = inference.filter(
+    (probe) =>
+      !(probe.maskedLabel !== null && enumeratedLabels.has(probe.maskedLabel)) &&
+      !(probe.workspaceId !== null && workspaces.has(probe.workspaceId)),
+  );
+  const covered = inference.length - standalone.length;
   if (covered > 0) {
     diagnostics.push({
       provider: 'openrouter',
@@ -205,7 +229,7 @@ async function collect(
   );
 
   const records: UsageRecord[] = [];
-  for (const outcome of [...perKey, ...unscoped]) {
+  for (const outcome of [...perKey, ...remainders, ...unscoped]) {
     records.push(...outcome.records);
     diagnostics.push(...outcome.diagnostics);
   }
@@ -214,7 +238,7 @@ async function collect(
     ...DECLARED,
     splitByApiKey: records.some((record) => record.apiKey !== null),
     splitByAccount: enumerated.some((entry) => entry.row.creator_user_id),
-    splitByWorkspace: enumerated.some((entry) => entry.row.workspace_id),
+    splitByWorkspace: records.some((record) => record.workspace !== null),
   };
   const failed = diagnostics.some((diagnostic) => diagnostic.level === 'error');
   const status = failed
@@ -275,7 +299,12 @@ async function probeKey(
       });
     }
     return {
-      probed: { credential, kind, maskedLabel: data.label ?? null },
+      probed: {
+        credential,
+        kind,
+        maskedLabel: data.label ?? null,
+        workspaceId: data.workspace_id ?? null,
+      },
       diagnostics,
     };
   } catch (error) {
@@ -378,7 +407,18 @@ async function listKeys(
  * *labelled* management key that sees exactly one workspace names it, since that
  * label is the operator's own name for the workspace they scoped the key to.
  */
-function nameWorkspacesFromLabels(enumerated: readonly Enumerated[]): Map<string, string> {
+function nameWorkspacesFromLabels(
+  probes: readonly Probed[],
+  enumerated: readonly Enumerated[],
+): Map<string, string> {
+  const names = new Map<string, string>();
+  // The probe names the key's own workspace outright, even when another
+  // credential enumerated that workspace's keys first.
+  for (const probe of probes) {
+    if (probe.kind !== 'management' || !probe.credential.labelled || !probe.workspaceId) continue;
+    if (!names.has(probe.workspaceId)) names.set(probe.workspaceId, probe.credential.label);
+  }
+
   const byCredential = new Map<string, { label: string; workspaces: Set<string> }>();
   for (const entry of enumerated) {
     if (!entry.via.credential.labelled) continue;
@@ -390,7 +430,6 @@ function nameWorkspacesFromLabels(enumerated: readonly Enumerated[]): Map<string
     byCredential.set(key, found);
   }
 
-  const names = new Map<string, string>();
   for (const { label, workspaces } of byCredential.values()) {
     if (workspaces.size !== 1) continue;
     const [workspaceId] = workspaces;
@@ -468,6 +507,188 @@ async function collectUnscoped(context: CollectContext, probe: Probed): Promise<
       ],
     };
   }
+}
+
+/** A workspace's identity for de-duplication: its id, else the credential's own. */
+function workspaceScope(probe: Probed): string {
+  return probe.workspaceId ?? `credential:${probe.credential.label}`;
+}
+
+/**
+ * A management key's unfiltered `/activity` is its whole workspace. Less what
+ * the workspace's listed keys already reported, cell by cell, it is the usage
+ * no key accounts for — reported with the workspace and without a key.
+ */
+async function collectWorkspaceRemainder(
+  context: CollectContext,
+  probe: Probed,
+  keyed: readonly UsageRecord[],
+  workspaceNames: Map<string, string>,
+): Promise<Outcome> {
+  const label = probe.credential.label;
+  let total: Outcome;
+  try {
+    const response = await context.http.json<ActivityResponse>(`${BASE_URL}/activity`, {
+      headers: authHeaders(probe.credential.secret),
+    });
+    total = toOutcome(response.data ?? [], context, {
+      apiKey: null,
+      account: null,
+      workspace: probe.workspaceId
+        ? { id: probe.workspaceId, name: workspaceNames.get(probe.workspaceId) ?? null }
+        : null,
+      credentialLabel: label,
+      workspaceNamed: Boolean(probe.workspaceId && workspaceNames.has(probe.workspaceId)),
+      apiKeyIdMasked: false,
+    });
+  } catch (error) {
+    return {
+      records: [],
+      diagnostics: [
+        {
+          provider: 'openrouter',
+          level: 'warning',
+          code: 'workspace-activity-failed',
+          message: `The workspace activity for "${label}" could not be read (${describe(error)}); usage on no listed key is missing from this report.`,
+        },
+      ],
+    };
+  }
+
+  const { records, short, tokens, costMicros } = netAgainstKeys(total.records, keyed);
+
+  const diagnostics = [...total.diagnostics];
+  if (tokens > 0) {
+    const workspace = probe.workspaceId
+      ? (workspaceNames.get(probe.workspaceId) ?? probe.workspaceId)
+      : label;
+    diagnostics.push({
+      provider: 'openrouter',
+      level: 'info',
+      code: 'activity-without-key',
+      message: `${tokens} tokens ($${microsToUsd(costMicros).toFixed(2)}) of activity in workspace "${workspace}" are on no listed API key (a deleted key, or use outside one); they are reported under the workspace without a key.`,
+    });
+  }
+  if (short > 0) {
+    diagnostics.push({
+      provider: 'openrouter',
+      level: 'warning',
+      code: 'workspace-total-short',
+      message: `${short} activity cell(s) for "${label}" add up to less than its keys' own activity; those cells keep the per-key figures only.`,
+    });
+  }
+  return { records, diagnostics };
+}
+
+/** The workspace's cells less its keys' cells, and how often keys exceeded them. */
+function netAgainstKeys(totals: readonly UsageRecord[], keyed: readonly UsageRecord[]) {
+  const claimed = new Map<string, Amounts>();
+  for (const record of keyed) addInto(claimed, cellOf(record), amountsOf(record));
+  const cells = new Map<string, { template: UsageRecord; amounts: Amounts }>();
+  for (const record of totals) {
+    const cell = cellOf(record);
+    const found = cells.get(cell);
+    if (found) found.amounts = plus(found.amounts, amountsOf(record));
+    else cells.set(cell, { template: record, amounts: amountsOf(record) });
+  }
+
+  const records: UsageRecord[] = [];
+  let short = [...claimed.keys()].filter((cell) => !cells.has(cell)).length;
+  let tokens = 0;
+  let costMicros = 0;
+  for (const [cell, { template, amounts }] of cells) {
+    const rest = minus(amounts, claimed.get(cell) ?? ZERO_AMOUNTS);
+    const values = Object.values(rest);
+    // Keys reporting more than their workspace is a contradiction in the
+    // platform's own figures; the per-key rows stand and nothing is netted.
+    if (values.some((value) => value < 0)) {
+      short += 1;
+      continue;
+    }
+    if (values.every((value) => value === 0)) continue;
+    tokens += rest.input + rest.output;
+    costMicros += rest.cost;
+    records.push(remainderRecord(template, rest));
+  }
+
+  return { records, short, tokens, costMicros };
+}
+
+type Amounts = {
+  input: number;
+  output: number;
+  reasoning: number;
+  requests: number;
+  cost: number;
+  byok: number;
+};
+
+const ZERO_AMOUNTS: Amounts = { input: 0, output: 0, reasoning: 0, requests: 0, cost: 0, byok: 0 };
+
+/** One `/activity` row's grain, as far as a record still carries it. */
+function cellOf(record: UsageRecord): string {
+  return [
+    record.bucketStart,
+    record.model,
+    record.tags.modelPermaslug,
+    record.tags.upstreamProvider,
+  ].join('\u0000');
+}
+
+function amountsOf(record: UsageRecord): Amounts {
+  return {
+    input: record.tokens.input,
+    output: record.tokens.output,
+    reasoning: record.tokens.reasoning,
+    requests: record.requests ?? 0,
+    cost: record.reportedCostMicros ?? 0,
+    byok: record.extras.byokCostMicros ?? 0,
+  };
+}
+
+function plus(a: Amounts, b: Amounts): Amounts {
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    reasoning: a.reasoning + b.reasoning,
+    requests: a.requests + b.requests,
+    cost: a.cost + b.cost,
+    byok: a.byok + b.byok,
+  };
+}
+
+function minus(a: Amounts, b: Amounts): Amounts {
+  return plus(a, {
+    input: -b.input,
+    output: -b.output,
+    reasoning: -b.reasoning,
+    requests: -b.requests,
+    cost: -b.cost,
+    byok: -b.byok,
+  });
+}
+
+function addInto(map: Map<string, Amounts>, cell: string, amounts: Amounts): void {
+  map.set(cell, plus(map.get(cell) ?? ZERO_AMOUNTS, amounts));
+}
+
+function remainderRecord(template: UsageRecord, rest: Amounts): UsageRecord {
+  const extras: Record<string, number> = {};
+  if (template.extras.reasoningTokens !== undefined) extras.reasoningTokens = rest.reasoning;
+  if (rest.byok > 0) extras.byokCostMicros = rest.byok;
+  return {
+    ...template,
+    tokens: {
+      ...template.tokens,
+      input: rest.input,
+      output: rest.output,
+      reasoning: rest.reasoning,
+    },
+    requests: template.requests === null ? null : rest.requests,
+    reportedCostMicros: template.reportedCostMicros === null ? null : rest.cost,
+    extras,
+    tags: { ...template.tags, apiKeyAttribution: 'no-listed-key' },
+  };
 }
 
 type Attribution = {
