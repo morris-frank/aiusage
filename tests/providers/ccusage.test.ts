@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CommandRunner } from '../../src/providers/ccusage.js';
 import { createCcusageProvider, localOverlapDiagnostic } from '../../src/providers/ccusage.js';
@@ -232,5 +235,52 @@ describe('local agent source (ccusage)', () => {
     expect(diagnostic.level).toBe('warning');
     expect(diagnostic.code).toBe('local-overlap-possible');
     expect(diagnostic.message).toContain('counted twice');
+  });
+
+  it('keeps a day whose logs were deleted, from the ledger, and says so', async () => {
+    const ledger = join(await mkdtemp(join(tmpdir(), 'aiusage-ledger-')), 'ledger.json');
+    const config = { ...CONFIG, ledger };
+    await createCcusageProvider(config, runner(PAYLOAD)).collect(context());
+
+    // The agent's transcripts are gone: ccusage now reports nothing for that day.
+    const result = await createCcusageProvider(config, runner({ daily: [] })).collect(context());
+
+    expect(result.records.map((record) => [record.tags.agent, record.model])).toEqual([
+      ['claude', 'claude-opus-5'],
+      ['codex', 'gpt-5.6-terra'],
+    ]);
+    expect(result.records[0]?.tags.source).toBe('ccusage-ledger');
+    expect(result.records[0]?.costBasis).toBe('imported');
+    expect(result.diagnostics.find((d) => d.code === 'local-ledger-used')?.message).toMatch(
+      /^2 local row\(s\) come from the ledger, adding 121600 tokens/,
+    );
+  });
+
+  it('takes the live row whenever the logs hold more than the ledger', async () => {
+    const ledger = join(await mkdtemp(join(tmpdir(), 'aiusage-ledger-')), 'ledger.json');
+    const config = { ...CONFIG, ledger };
+    await createCcusageProvider(config, runner(PAYLOAD)).collect(context());
+
+    const grown = structuredClone(PAYLOAD);
+    const claude = grown.daily[0]?.agents[0]?.modelBreakdowns[0];
+    if (claude) claude.cacheReadTokens = 190_000;
+    const result = await createCcusageProvider(config, runner(grown)).collect(context());
+
+    expect(result.records[0]?.tokens.cacheRead).toBe(190_000);
+    expect(result.records[0]?.tags.source).toBe('ccusage');
+    expect(result.diagnostics.map((d) => d.code)).not.toContain('local-ledger-used');
+  });
+
+  it('never overwrites a ledger it cannot read', async () => {
+    const ledger = join(await mkdtemp(join(tmpdir(), 'aiusage-ledger-')), 'ledger.json');
+    await writeFile(ledger, 'not json', 'utf8');
+
+    const result = await createCcusageProvider({ ...CONFIG, ledger }, runner(PAYLOAD)).collect(
+      context(),
+    );
+
+    expect(result.records).toHaveLength(2);
+    expect(result.diagnostics.map((d) => d.code)).toContain('local-ledger-unreadable');
+    expect(await readFile(ledger, 'utf8')).toBe('not json');
   });
 });

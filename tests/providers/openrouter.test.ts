@@ -43,8 +43,20 @@ function keysRoute(data: unknown[]): StubRoute {
   return { when: '/v1/keys', body: { data } };
 }
 
-function probeRoute(management: boolean, label = 'sk-or-v1-abc...xyz'): StubRoute {
-  return { when: '/v1/key', body: { data: { label, is_management_key: management } } };
+function probeRoute(
+  management: boolean,
+  label = 'sk-or-v1-abc...xyz',
+  workspaceId: string | null = null,
+): StubRoute {
+  return {
+    when: '/v1/key',
+    body: { data: { label, is_management_key: management, workspace_id: workspaceId } },
+  };
+}
+
+/** A management key's unfiltered `/activity`: its whole workspace. */
+function workspaceRoute(data: unknown[], times?: number): StubRoute {
+  return { when: '/activity', body: { data }, ...(times ? { times } : {}) };
 }
 
 function context(routes: StubRoute[], range = { since: '2026-07-01', until: '2026-07-26' }) {
@@ -74,6 +86,7 @@ describe('OpenRouter provider', () => {
         and: ['api_key_hash=hash-two'],
         body: { data: [activityRow({ usage: 0.5, model: 'openai/gpt-5.3' })] },
       },
+      workspaceRoute([activityRow(), activityRow({ usage: 0.5, model: 'openai/gpt-5.3' })]),
     ]);
 
     const result = await createOpenRouterProvider({ keys: [managementKey()] }).collect(ctx);
@@ -100,7 +113,8 @@ describe('OpenRouter provider', () => {
     expect(first?.tags.upstreamProvider).toBe('Anthropic');
     // Account attribution is derived from key ownership, and says so.
     expect(first?.tags.accountAttribution).toBe('key-creator');
-    expect(fetch.calls.filter((url) => url.includes('/activity'))).toHaveLength(2);
+    // Two per-key reads and one for the workspace, whose keys account for all of it.
+    expect(fetch.calls.filter((url) => url.includes('/activity'))).toHaveLength(3);
   });
 
   it('reads the timestamped activity date as a UTC day instead of dropping the row', async () => {
@@ -191,6 +205,9 @@ describe('OpenRouter provider', () => {
         and: ['api_key_hash=hash-b'],
         body: { data: [activityRow({ usage: 0.02 })] },
       },
+      // Serial (concurrency 1), so each workspace's unfiltered read is answered in order.
+      workspaceRoute([activityRow()], 1),
+      workspaceRoute([activityRow({ usage: 0.02 })], 1),
     ]);
 
     const result = await createOpenRouterProvider({
@@ -203,15 +220,60 @@ describe('OpenRouter provider', () => {
       range: { since: '2026-07-01', until: '2026-07-26' },
       timeZone: 'UTC',
       hourlyBuckets: false,
-      concurrency: 2,
+      concurrency: 1,
       now: NOW,
     });
 
     expect(result.records).toHaveLength(2);
     expect(result.records.map((record) => record.apiKey?.id).sort()).toEqual(['hash-a', 'hash-b']);
     expect(result.diagnostics.map((d) => d.code)).toContain('key-scope-overlap');
-    // One activity call per distinct key hash, not per (key × credential).
-    expect(fetch.calls.filter((url) => url.includes('/activity'))).toHaveLength(2);
+    // One activity call per distinct key hash, not per (key × credential), plus
+    // one unfiltered read per workspace.
+    expect(fetch.calls.filter((url) => url.includes('api_key_hash'))).toHaveLength(2);
+  });
+
+  it('reports workspace activity on no listed key under the workspace, without recounting keyed activity', async () => {
+    const { ctx } = context([
+      keysRoute([{ hash: 'hash-one', name: 'CI key', workspace_id: 'ws_1' }]),
+      probeRoute(true, 'sk-or-v1-abc...xyz', 'ws_1'),
+      { when: '/activity', and: ['api_key_hash=hash-one'], body: { data: [activityRow()] } },
+      // The workspace saw 80 prompt tokens and $0.025 more than its one live key:
+      // a deleted key's traffic, which no per-key call can return.
+      workspaceRoute([activityRow({ prompt_tokens: 130, usage: 0.04, requests: 7 })]),
+    ]);
+
+    const result = await createOpenRouterProvider({
+      keys: [{ ...managementKey('acme'), labelled: true }],
+    }).collect(ctx);
+
+    expect(result.status).toBe('ok');
+    const rest = result.records.find((record) => record.apiKey === null);
+    expect(rest?.workspace).toEqual({ id: 'ws_1', name: 'acme' });
+    expect(rest?.tokens).toMatchObject({ input: 80, output: 0, reasoning: 0 });
+    expect(rest?.reportedCostMicros).toBe(25_000);
+    expect(rest?.requests).toBe(2);
+    expect(rest?.tags.apiKeyAttribution).toBe('no-listed-key');
+    // Keyed and unkeyed together are the workspace's own total, not more.
+    const cost = result.records.reduce((sum, record) => sum + (record.reportedCostMicros ?? 0), 0);
+    expect(cost).toBe(40_000);
+    expect(result.diagnostics.map((d) => d.code)).toContain('activity-without-key');
+  });
+
+  it('reads a workspace once when two management keys are scoped to it', async () => {
+    const { ctx, fetch } = context([
+      keysRoute([{ hash: 'hash-one', name: 'CI key', workspace_id: 'ws_1' }]),
+      probeRoute(true, 'sk-or-v1-abc...xyz', 'ws_1'),
+      { when: '/activity', and: ['api_key_hash=hash-one'], body: { data: [activityRow()] } },
+      workspaceRoute([activityRow({ prompt_tokens: 150, usage: 0.035 })]),
+    ]);
+
+    const result = await createOpenRouterProvider({
+      keys: [managementKey('first'), managementKey('second')],
+    }).collect(ctx);
+
+    const cost = result.records.reduce((sum, record) => sum + (record.reportedCostMicros ?? 0), 0);
+    expect(cost).toBe(35_000);
+    expect(fetch.calls.filter((url) => url.endsWith('/activity'))).toHaveLength(1);
   });
 
   it('names a workspace after the labelled key that is scoped to it', async () => {

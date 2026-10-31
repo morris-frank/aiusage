@@ -10,7 +10,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { ProviderId } from './types.js';
+import { isLocalProvider, PROVIDER_IDS, type ProviderId } from './types.js';
 
 export class ConfigError extends Error {}
 
@@ -71,6 +71,8 @@ export type LocalSourceConfig = {
   /** Never reach the network to obtain or price with ccusage. */
   offline: boolean;
   timeoutMs: number;
+  /** The local ledger file (`providers/ledger.ts`); absent or null keeps no floor. */
+  ledger?: string | null;
 };
 
 export type RuntimeConfig = {
@@ -95,6 +97,15 @@ export type RuntimeConfig = {
   ccusageCommand: string[] | null;
   /** How long the ccusage subprocess may take, from `AIUSAGE_CCUSAGE_TIMEOUT_MS`. */
   ccusageTimeoutMs: number;
+  /**
+   * Local agents the operator says are billed through a platform, from
+   * `AIUSAGE_LOCAL_BILLED_VIA` (`pi:openrouter[:<key name>],…`). Their local
+   * rows are the platform's rows seen twice; the named key's platform rows are
+   * the agent's. See `collect.ts`.
+   */
+  localBilledVia: Map<string, BilledVia>;
+  /** Where the local ledger lives, from `AIUSAGE_LOCAL_LEDGER`; null keeps none. */
+  localLedger: string | null;
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -117,6 +128,23 @@ function positiveInt(value: string | undefined, fallback: number, name: string):
     throw new ConfigError(`${name} must be a positive integer, got "${text}"`);
   }
   return parsed;
+}
+
+export type BilledVia = { platform: ProviderId; apiKeyName: string | null };
+
+function billedVia(value: string | undefined): Map<string, BilledVia> {
+  const pairs = new Map<string, BilledVia>();
+  for (const entry of trimmed(value)?.split(',') ?? []) {
+    const [agent, platform, ...name] = entry.split(':').map((part) => part.trim());
+    const id = PROVIDER_IDS.find((candidate) => candidate === platform);
+    if (!agent || !id || isLocalProvider(id)) {
+      throw new ConfigError(
+        `AIUSAGE_LOCAL_BILLED_VIA entries must be agent:platform[:key name] (a platform is one of ${PROVIDER_IDS.filter((p) => !isLocalProvider(p)).join(', ')}), got "${entry.trim()}"`,
+      );
+    }
+    pairs.set(agent, { platform: id, apiKeyName: name.join(':') || null });
+  }
+  return pairs;
 }
 
 function defaultCacheDir(env: NodeJS.ProcessEnv): string {
@@ -220,6 +248,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
       DEFAULT_CCUSAGE_TIMEOUT_MS,
       'AIUSAGE_CCUSAGE_TIMEOUT_MS',
     ),
+    localBilledVia: billedVia(env.AIUSAGE_LOCAL_BILLED_VIA),
+    // `directory` only expands `~/`; a file path needs exactly that too.
+    localLedger: directory(env.AIUSAGE_LOCAL_LEDGER),
   };
 }
 
