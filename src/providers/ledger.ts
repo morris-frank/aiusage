@@ -15,7 +15,9 @@
  * counted twice.
  *
  * A row may carry a `note` — how it got there when ccusage did not write it
- * (a restore from earlier reports). It travels into `tags.ledgerNote`.
+ * (a restore from earlier reports). It travels into `tags.ledgerNote`. A noted
+ * row is usage the logs never held again, so it sits beside the recorded row
+ * for the same day, agent and model rather than competing with it.
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -139,7 +141,9 @@ async function write(path: string, ledger: LedgerFile): Promise<void> {
 }
 
 function keyOf(row: LedgerRow): string {
-  return [row.timeZone, row.bucketStart, row.agent ?? '', row.model ?? ''].join('\u0000');
+  return [row.timeZone, row.bucketStart, row.agent ?? '', row.model ?? '', row.note ?? ''].join(
+    '\u0000',
+  );
 }
 
 function tokensOf(row: LedgerRow): number {
