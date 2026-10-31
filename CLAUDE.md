@@ -56,10 +56,11 @@ The rules below exist to make that impossible to do quietly.
     documented: those panels do not reconcile with the report's totals on a mixed run.
 13. **The figure carries its own provenance.** `chart/` output travels without the table,
     so its caption states the window, the cost provenance, the price sources and every
-    source that did not fully report. Soilytix visual language: white report surface, flat,
-    hairline rules, Inter, Lime ink for the title and key rule, Mint as the one highlight,
-    the sequential ramp for ordered token classes, vendor brand colours opening the series
-    palette (then a spare black and the neutral charcoal). Vendor
+    source that did not fully report. Visual language follows maurice-frank.com, where the
+    page is published: white surface, flat, hairline rules, Atkinson Hyperlegible Next,
+    monochrome ink, a monochrome sequential ramp for ordered token classes, vendor brand
+    colours as the only hues (a colour under 3:1 on white keeps its fill and takes a darker
+    edge from `inkOf`). Projections are dashed and labelled as estimates. Vendor
     marks are the vendor's own logo, inlined as SVG (LobeHub's MIT set, source and licence
     in `brand/vendor-marks/`) and drawn in the palette's colour, and a name that does not
     identify a vendor gets the neutral mark rather than a guess.

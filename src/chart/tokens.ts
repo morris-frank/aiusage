@@ -1,37 +1,37 @@
 /**
  * The report's visual vocabulary: design tokens, series colours and vendor marks.
  *
- * Values are taken from the Soilytix design system (`colors_and_type.css`) rather
- * than invented here, and derived treatments (note fills, risk fills) come from
- * the system's own `accent-soft` and `warn` rather than standalone hexes, so a
- * change to the system carries through instead of drifting.
+ * Surfaces, ink and type follow maurice-frank.com, where the report is published
+ * (`tokens.css` there: pure monochrome, hairline borders, Atkinson Hyperlegible
+ * Next), converted from its oklch values to hex so a bare SVG renders the same.
+ * Derived treatments (note fills, risk fills) come from `accentSoft` and `warn`
+ * rather than standalone hexes, so a change here carries through.
  */
 
-/** Surfaces and ink. A report is a **white** surface; bone is for slides and app UI. */
+/** Surfaces and ink. A report is a **white** surface. */
 export const TOKEN = {
   surface: '#FFFFFF',
-  ink: '#29332E', // Obsidian
-  body: '#233A2E',
-  muted: '#6C7E72',
-  subtle: '#93A89B',
-  rule: '#E4E7DC',
-  grid: '#E8EBE0',
-  /** Lime ink — titles and key rules on a light surface. */
-  eyebrow: '#4A7A0F',
-  /** Mint — the one primary highlight. */
-  highlight: '#1AB172',
-  /** Deep Mint — Mint at text sizes. */
-  highlightInk: '#0B714E',
-  /** Mint accent-soft: the note/invariant tint everything soft derives from. */
-  accentSoft: '#E3EFE0',
-  accentSoftInk: '#0B5E49',
-  cream: '#F4F5EE',
+  ink: '#111111', // --text-primary
+  body: '#111111',
+  muted: '#4A4A4A', // --text-secondary
+  subtle: '#767676', // --text-muted
+  rule: '#D1D5DB', // --border-medium
+  grid: '#E5E7EB', // --border-hairline
+  /** Titles and the key rule: the site sets them in primary ink, not a hue. */
+  eyebrow: '#111111',
+  /** The one highlight — the site's --border-strong, its only tinted ink. */
+  highlight: '#1F2A25',
+  highlightInk: '#1F2A25',
+  /** --bg-hover: the soft tint everything soft derives from. */
+  accentSoft: '#F1F3F5',
+  accentSoftInk: '#1F2A25',
+  cream: '#F8F9FA', // --bg-subtle
   /** Warn — every risk treatment derives from this. */
   warn: '#EE7931',
   warnSoft: '#FFF1E7',
   warnSoftInk: '#8A4A16',
-  font: "Inter, 'Helvetica Neue', Arial, sans-serif",
-  mono: "'IBM Plex Mono', ui-monospace, Menlo, monospace",
+  font: "'Atkinson Hyperlegible Next', system-ui, sans-serif",
+  mono: "'Atkinson Hyperlegible Next', ui-monospace, Menlo, monospace",
 } as const;
 
 /**
@@ -46,30 +46,30 @@ export const SERIES_COLOURS = [
   '#3186FF', // Google Gemini
   '#AB68FF', // OpenAI GPT-4
   '#F9C322', // OpenAI O1
-  '#C8FF00', // OpenRouter
+  '#C8FF01', // OpenRouter
   '#000000', // black (no vendor claim; a spare categorical slot)
   '#4A4A44', // charcoal (neutral role)
 ] as const;
 
 /**
  * Token classes are *ordered*, not categorical — uncached input, output, cache
- * write, cache read — so they take the system's sequential green ramp instead of
- * the categorical accents.
+ * write, cache read — so they take a sequential ramp, in the site's monochrome
+ * rather than a hue, so they never read as one of the vendor series.
  */
 export const TOKEN_CLASSES = [
-  { key: 'input', label: 'input', colour: '#3A5D20' },
-  { key: 'output', label: 'output', colour: '#5E8A2A' },
-  { key: 'cacheCreation', label: 'cache write', colour: '#86B446' },
-  { key: 'cacheRead', label: 'cache read', colour: '#CFE3A3' },
+  { key: 'input', label: 'input', colour: '#262626' },
+  { key: 'output', label: 'output', colour: '#5C5C5C' },
+  { key: 'cacheCreation', label: 'cache write', colour: '#939393' },
+  { key: 'cacheRead', label: 'cache read', colour: '#CFCFCF' },
 ] as const;
 
 export type TokenClassKey = (typeof TOKEN_CLASSES)[number]['key'];
 
 /**
  * The sequential ramp for a magnitude encoding — a heatmap cell — lightest to
- * darkest. Derived from the same ordered green ramp `TOKEN_CLASSES` uses, with
- * the system's own `accent-soft` as the lightest step, so a change to the ramp
- * carries here instead of a second set of greens drifting away from the first.
+ * darkest. Derived from the same ordered ramp `TOKEN_CLASSES` uses, with
+ * `accentSoft` as the lightest step, so a change to the ramp carries here
+ * instead of a second ramp drifting away from the first.
  */
 export const SEQUENTIAL_RAMP = [
   TOKEN.accentSoft,
@@ -91,23 +91,60 @@ export type VendorId =
 
 export function vendorColour(vendor: VendorId): string {
   switch (vendor) {
-    case 'anthropic':
     case 'claude':
     case 'claudecode':
       return '#D97757';
+    // The API platform beside Claude Code: the same clay, darkened, so the two
+    // read as one family without sharing a hue.
+    case 'anthropic':
+      return '#B45A3C';
     case 'openai':
       return '#19C37D';
     case 'gemini':
     case 'googlecloud':
-    case 'antigravity':
       return '#3186FF';
+    case 'antigravity':
+      return '#A142F4';
+    // OpenRouter's own lime. Too light to stand on white alone, so every mark
+    // drawn in it also takes `inkOf` as its edge.
     case 'openrouter':
-      return '#8CA800'; // Darkened #C8FF00 for contrast on white
+      return '#C8FF01';
     case 'pi':
+      return '#000000';
     case 'local':
     case 'other':
       return '#4A4A44';
   }
+}
+
+/**
+ * A colour a mark can be drawn *with* on white: the colour itself when it holds
+ * 3:1 against the surface (WCAG's floor for graphics), else the same hue
+ * darkened until it does. Fills keep the brand colour; edges, lines and dots
+ * take this.
+ */
+export function inkOf(colour: string): string {
+  const rgb = [1, 3, 5].map((at) => Number.parseInt(colour.slice(at, at + 2), 16) / 255);
+  if (rgb.some(Number.isNaN)) return colour;
+  let scale = 1;
+  const at = (factor: number) => rgb.map((channel) => channel * factor);
+  while (contrastOnWhite(at(scale)) < 3 && scale > 0) scale -= 0.02;
+  if (scale === 1) return colour;
+  return `#${at(scale)
+    .map((channel) =>
+      Math.round(channel * 255)
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')
+    .toUpperCase()}`;
+}
+
+function contrastOnWhite(rgb: readonly number[]): number {
+  const [r = 0, g = 0, b = 0] = rgb.map((channel) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+  return 1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05);
 }
 
 /**
