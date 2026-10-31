@@ -1184,6 +1184,17 @@ export function captionLines(
   if (report.meta.priceSources.length > 0) {
     lines.push(`Unit prices: ${report.meta.priceSources.join(', ')}.`);
   }
+  const local = report.meta.providers.find((provider) => provider.id === 'ccusage');
+  if (report.meta.costIncluded && local && local.recordCount > 0) {
+    // ccusage prices every past day at the table it loads today; only the
+    // platforms' own rows carry the price that was billed on the day.
+    const kept = report.meta.notices.some((notice) => notice.code === 'local-ledger-used')
+      ? ' Rows kept in the local ledger carry the prices in force when they were recorded.'
+      : '';
+    lines.push(
+      `Local agent cost is priced at today's unit prices, not those in force on the day.${kept}`,
+    );
+  }
 
   lines.push(...concentrationCaption(report));
 
