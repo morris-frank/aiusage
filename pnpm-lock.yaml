@@ -1025,8 +1025,8 @@ snapshots:
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 26.1.1
-      fsevents: 2.3.3
-      tinyglobby: 0.2.17
+    transitivePeerDependencies:
+      - msw
 
   why-is-node-running@2.3.0:
     dependencies:
