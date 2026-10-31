@@ -241,6 +241,40 @@ describe('report figure', () => {
     expect(svg).toContain('litellm@2026-07-26');
   });
 
+  it("says local cost is priced today, since ccusage re-prices past days at today's table", () => {
+    const svg = renderReportSvg(
+      report([row('2026-07-25', { anthropic: 2 })], {
+        providers: [
+          {
+            id: 'ccusage',
+            label: 'Local agents',
+            status: 'ok',
+            capabilities: {
+              usage: true,
+              reportedCost: false,
+              splitByModel: true,
+              splitByApiKey: false,
+              splitByAccount: false,
+              splitByWorkspace: false,
+              livePricing: true,
+              hourly: false,
+              maxLookbackDays: null,
+            },
+            identity: null,
+            recordCount: 3,
+            costSource: 'imported',
+          },
+        ],
+        notices: [
+          { provider: 'ccusage', level: 'info', code: 'local-ledger-used', message: 'kept' },
+        ],
+      }),
+      OPTIONS,
+    );
+    expect(svg).toContain('priced at today');
+    expect(svg).toContain('Rows kept in the local ledger');
+  });
+
   it('says in the caption when cost was not collected', () => {
     const svg = renderReportSvg(report([row('2026-07-25', { anthropic: 0 })]), {
       series: 'provider',
