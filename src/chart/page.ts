@@ -9,11 +9,14 @@
  * sake — each one answers "how big, made of what, from where" without a second
  * lookup.
  *
- * White page, hairline borders, no shadows: reports and documents are the white
- * surfaces in this visual language, and bone prints muddy.
+ * White page, hairline borders, no shadows, in maurice-frank.com's type and
+ * monochrome, where the page is published. The figure is drawn twice — desktop
+ * and phone width — and the stylesheet shows the one that fits; a scaled-down
+ * desktop figure leaves its labels unreadably small on a phone.
  */
 
 import type { CostSource } from '../cost.js';
+import { addDays, dayKey, daysBetween } from '../dates.js';
 import { formatUsd } from '../money.js';
 import type { PeriodReport, ProviderSummary, ReportRow } from '../report.js';
 import {
@@ -42,6 +45,8 @@ export function renderReportHtml(report: PeriodReport, options: ChartOptions): s
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeXml(titleOf(options))} — aiusage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@300..700&display=swap">
 <style>
 ${styles()}
 </style>
@@ -50,8 +55,12 @@ ${styles()}
 <main>
 ${headerBlock(report, options)}
 ${cards(report, options)}
-<figure>
+${projectionCards(report, options)}
+<figure class="wide">
 ${renderReportSvg(report, { ...options, header: false, interactive: true, width: 1100 })}
+</figure>
+<figure class="narrow">
+${renderReportSvg(report, { ...options, header: false, interactive: true, width: 420 })}
 </figure>
 ${periodTable(report, rows, options)}
 ${sourceTable(report, options)}
@@ -73,15 +82,17 @@ function styles(): string {
   --soft: ${TOKEN.accentSoft}; --soft-ink: ${TOKEN.accentSoftInk}; --cream: ${TOKEN.cream};
   --warn: ${TOKEN.warn}; --warn-soft: ${TOKEN.warnSoft}; --warn-soft-ink: ${TOKEN.warnSoftInk};
 }
-/* White page: this is a report, and bone prints muddy. */
+/* White page: the figure's colours are drawn for white, so the page stays light. */
+html { color-scheme: light; }
 body { margin: 0; background: #fff; color: var(--fg); font-family: ${TOKEN.font};
        font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 main { max-width: 1100px; margin: 0 auto; padding: 40px 28px 80px; }
 figure { margin: 32px 0 0; }
+figure.narrow { display: none; }
 svg { width: 100%; height: auto; display: block; }
 
-h1 { font-size: 34px; font-weight: 300; line-height: 1.15; color: var(--lime);
-     margin: 0 0 6px; letter-spacing: -0.01em; }
+h1 { font-size: 34px; font-weight: 700; line-height: 1.15; color: var(--lime);
+     margin: 0 0 6px; letter-spacing: -0.03em; }
 .lede { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
 .rule { height: 1px; background: var(--lime); margin: 0 0 28px; }
 h2 { font-size: 17px; font-weight: 400; color: var(--ink); margin: 44px 0 4px; }
@@ -90,10 +101,13 @@ h2 + .note { margin: 0 0 14px; }
 
 /* Summary strip — hairline cards, flat. Numbers light and large; one Mint value. */
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.card { border: 1px solid var(--rule); border-radius: 14px; padding: 16px 18px; }
+.card { border: 1px solid var(--grid); border-radius: 4px; padding: 16px 18px; }
+/* A projection is modelled, not measured: dashed, so it never reads as billed. */
+.card.projected { border-style: dashed; border-color: var(--rule); }
+.cards + .cards { margin-top: 12px; }
 .card .label { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
                color: var(--muted); }
-.card .value { font-size: 27px; font-weight: 300; color: var(--ink); line-height: 1.25;
+.card .value { font-size: 27px; font-weight: 400; color: var(--ink); line-height: 1.25;
                font-variant-numeric: tabular-nums; margin-top: 4px;
                display: flex; align-items: center; gap: 10px; }
 .card .value.primary { color: var(--mint-ink); }
@@ -105,7 +119,9 @@ h2 + .note { margin: 0 0 14px; }
 table { width: 100%; border-collapse: collapse; font-size: 12.5px;
         font-variant-numeric: tabular-nums; }
 caption { text-align: left; color: var(--muted); font-size: 12.5px; padding: 0 0 12px; }
-.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* Relative, so the absolutely placed screen-reader text stays inside the scroller
+   instead of widening the whole page on a phone. */
+.table-scroll { position: relative; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 thead th { position: sticky; top: 0; background: #fff; text-align: right; font-weight: 500;
            color: var(--muted); font-size: 10.5px; letter-spacing: 0.06em;
            text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
@@ -169,6 +185,16 @@ svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
+@media (max-width: 700px) {
+  main { padding: 24px 16px 56px; }
+  h1 { font-size: 26px; }
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .card { padding: 12px 14px; }
+  .card .value { font-size: 21px; }
+  figure.wide { display: none; }
+  figure.narrow { display: block; }
+}
+
 @media print {
   main { padding: 0; max-width: none; }
   thead th { position: static; }
@@ -184,8 +210,7 @@ svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight
  * still shows the first view.
  */
 function tabScript(): string {
-  return `const svg = document.querySelector('svg[data-view]');
-if (svg) {
+  return `for (const svg of document.querySelectorAll('svg[data-view]')) {
   const bars = [...svg.querySelectorAll('[data-layer="bars"] rect')];
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
   let frame = 0;
@@ -295,6 +320,97 @@ ${entries
     (entry) => `  <div class="card">
     <div class="label">${escapeXml(entry.label)}</div>
     <div class="value${entry.primary ? ' primary' : ''}">${escapeXml(entry.value)}${entry.graphic ?? ''}</div>
+    <div class="sub">${escapeXml(entry.sub)}</div>
+  </div>`,
+  )
+  .join('\n')}
+</div>`;
+}
+
+/** Days of the run rate: four whole weeks, so weekends weigh what they do in a month. */
+const RATE_DAYS = 28;
+
+/**
+ * Where month, quarter and year land if spending continues at the recent rate:
+ * billed cost to date in the period, plus the mean of the last 28 complete days
+ * for every day left. A straight run rate, no trend — prices that fall and
+ * habits that change both move the real figure off it, and the cards say so.
+ *
+ * Today is partial, so it counts as a day at the rate rather than as its cost so
+ * far. A period that began before the window falls back to the rate over the
+ * whole period, and says that too. Daily reports only, and only with cost: a
+ * weekly bucket has no "days left", and a projection of nothing is not zero.
+ */
+function projectionCards(report: PeriodReport, options: ChartOptions): string {
+  if (!options.includeCost || !report.daily) return '';
+  const { since, until } = report.meta.range;
+  const today = dayKey(report.meta.generatedAt, report.meta.timezone);
+  const lastComplete = today <= until ? addDays(today, -1) : until;
+  const cost = new Map(report.daily.map((row) => [row.period, row.totalCost ?? 0]));
+  const between = (from: string, to: string): number => {
+    let total = 0;
+    for (let day = from; day <= to; day = addDays(day, 1)) total += cost.get(day) ?? 0;
+    return total;
+  };
+
+  const rateStart = [addDays(lastComplete, -(RATE_DAYS - 1)), since].sort().at(-1) ?? since;
+  const rateDays = daysBetween(rateStart, lastComplete) + 1;
+  if (rateDays < 7) return '';
+  const rate = between(rateStart, lastComplete) / rateDays;
+  const usd = (value: number) => formatUsd(Math.round(value * 1e6));
+
+  const [year, month] = today.split('-').map(Number) as [number, number];
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const quarterMonth = Math.floor((month - 1) / 3) * 3 + 1;
+  const periods = [
+    {
+      label: new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en-US', {
+        month: 'long',
+        timeZone: 'UTC',
+      }),
+      start: `${year}-${pad(month)}-01`,
+      end: addDays(`${month === 12 ? year + 1 : year}-${pad((month % 12) + 1)}-01`, -1),
+    },
+    {
+      label: `Q${(quarterMonth + 2) / 3} ${year}`,
+      start: `${year}-${pad(quarterMonth)}-01`,
+      end: addDays(
+        quarterMonth === 10 ? `${year + 1}-01-01` : `${year}-${pad(quarterMonth + 3)}-01`,
+        -1,
+      ),
+    },
+    { label: String(year), start: `${year}-01-01`, end: `${year}-12-31` },
+  ];
+
+  const entries = periods.map(({ label, start, end }) => {
+    const left = daysBetween(lastComplete, end);
+    if (start < since) {
+      const days = daysBetween(start, end) + 1;
+      return {
+        label: `${label} · run rate`,
+        value: usd(rate * days),
+        sub: `${days} days at the rate; the window starts after ${start}`,
+      };
+    }
+    const spent = between(start, lastComplete);
+    return {
+      label: `${label} · projected`,
+      value: usd(spent + rate * left),
+      sub: `${usd(spent)} to date + ${left} day${left === 1 ? '' : 's'} at the rate`,
+    };
+  });
+
+  return `<div class="cards">
+  <div class="card projected">
+    <div class="label">Run rate</div>
+    <div class="value">${escapeXml(usd(rate))}/day</div>
+    <div class="sub">${escapeXml(`mean of ${rateStart} to ${lastComplete}; an estimate, not billed`)}</div>
+  </div>
+${entries
+  .map(
+    (entry) => `  <div class="card projected">
+    <div class="label">${escapeXml(entry.label)}</div>
+    <div class="value">≈ ${escapeXml(entry.value)}</div>
     <div class="sub">${escapeXml(entry.sub)}</div>
   </div>`,
   )

@@ -271,6 +271,32 @@ describe('local agent source (ccusage)', () => {
     expect(result.diagnostics.map((d) => d.code)).not.toContain('local-ledger-used');
   });
 
+  it('adds a noted row beside the recorded one, since it is usage the logs no longer hold', async () => {
+    const ledger = join(await mkdtemp(join(tmpdir(), 'aiusage-ledger-')), 'ledger.json');
+    const config = { ...CONFIG, ledger };
+    await createCcusageProvider(config, runner(PAYLOAD)).collect(context());
+    const file = JSON.parse(await readFile(ledger, 'utf8'));
+    file.rows.push({
+      ...file.rows[0],
+      input: 5,
+      output: 0,
+      cacheCreation: 0,
+      cacheRead: 0,
+      note: 'restored',
+    });
+    await writeFile(ledger, JSON.stringify(file), 'utf8');
+
+    const result = await createCcusageProvider(config, runner(PAYLOAD)).collect(context());
+
+    expect(result.records.map((record) => record.tags.source)).toEqual([
+      'ccusage',
+      'ccusage',
+      'ccusage-ledger',
+    ]);
+    expect(result.records[2]?.tags.ledgerNote).toBe('restored');
+    expect(result.records[2]?.model).toBe(result.records[0]?.model);
+  });
+
   it('never overwrites a ledger it cannot read', async () => {
     const ledger = join(await mkdtemp(join(tmpdir(), 'aiusage-ledger-')), 'ledger.json');
     await writeFile(ledger, 'not json', 'utf8');

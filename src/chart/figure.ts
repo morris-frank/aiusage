@@ -41,10 +41,15 @@
  * source that did not fully report. A figure that gets forwarded without its
  * table must still be impossible to over-read.
  *
- * Visual language: Soilytix — flat, hairline rules, no gradients, no shadows,
- * Inter, white report surface, Lime ink for the title and the key rule, Mint as
- * the one primary highlight, and a vendor mark per series so identity never
- * depends on hue alone.
+ * Visual language: maurice-frank.com's — flat, hairline rules, no gradients, no
+ * shadows, Atkinson Hyperlegible Next, white surface, monochrome ink, vendor
+ * colours as the only hues, and a vendor mark per series so identity never
+ * depends on hue alone. A colour too light for white (OpenRouter's lime) keeps
+ * its fill and takes a darker edge from `inkOf`.
+ *
+ * Below 640 units wide the figure lays itself out for a phone: paired panels
+ * stack, the legend takes two columns, and labels shorten. The page draws both
+ * widths and shows the one that fits.
  */
 
 import type { SplitDimension } from '../aggregate.js';
@@ -53,6 +58,7 @@ import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from
 import {
   displayModel,
   escapeXml,
+  inkOf,
   SERIES_COLOURS,
   TOKEN,
   TOKEN_CLASSES,
@@ -142,14 +148,49 @@ type RankedRow = {
   unattributed?: boolean;
 };
 
-const LEFT = 76;
-const RIGHT_MARGIN = 168; // room for the end labels of the cumulative lines
 const PANEL_HEIGHT = 150;
 const PANEL_GAP = 74;
 const RANK_ROW_HEIGHT = 22;
 const RANK_CAPACITY = 8;
-/** Room for the model label and its vendor mark, left of the dot chart's axis. */
-const RANK_LEFT_MARGIN = 210;
+
+/** Margins and label budgets, which a phone-width figure has to spend differently. */
+type Layout = {
+  narrow: boolean;
+  left: number;
+  /** Room for the end labels of the cumulative lines. */
+  rightMargin: number;
+  /** Room for the model label and its vendor mark, left of the dot chart's axis. */
+  rankLeft: number;
+  legendColumns: number;
+  legendLabel: number;
+  endLabel: number;
+  rankLabel: number;
+};
+
+function layoutFor(width: number): Layout {
+  return width < 640
+    ? {
+        narrow: true,
+        left: 60,
+        rightMargin: 84,
+        rankLeft: 128,
+        legendColumns: 2,
+        legendLabel: 12,
+        // The mark names the line; on a phone only the amount follows it.
+        endLabel: 0,
+        rankLabel: 18,
+      }
+    : {
+        narrow: false,
+        left: 76,
+        rightMargin: 168,
+        rankLeft: 210,
+        legendColumns: 4,
+        legendLabel: 24,
+        endLabel: 16,
+        rankLabel: 30,
+      };
+}
 /** Where a two-panel row splits, as a share of the figure's width. */
 const SPLIT = 0.55;
 
@@ -174,7 +215,9 @@ const SERIES_NOUN: Record<SplitDimension, string> = {
 export function renderReportSvg(report: PeriodReport, options: ChartOptions): string {
   const rows = periodsOf(report);
   const width = options.width ?? 960;
-  const right = width - RIGHT_MARGIN;
+  const layout = layoutFor(width);
+  const margin = layout.left;
+  const right = width - layout.rightMargin;
   const series = buildSeries(rows, options);
   const measure: Measure = options.includeCost ? 'cost' : 'tokens';
   // The ranking reuses the top graph's colour for an agent, so the two agree.
@@ -182,10 +225,13 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
     options.series === 'agent' ? series.map((one) => [one.key, one.colour] as const) : [],
   );
   const rankedModels = buildModelRanking(rows, measure, agentColours);
-  const panelRows = panelSpecs(report, options, rankedModels);
+  // On a phone a paired row would leave each panel a thumbnail; stack them.
+  const panelRows = panelSpecs(report, options, rankedModels).flatMap((row) =>
+    layout.narrow ? row.map((spec) => [spec]) : [row],
+  );
 
   const withHeader = options.header !== false;
-  const legendRows = Math.max(1, Math.ceil(series.length / 4));
+  const legendRows = Math.max(1, Math.ceil(series.length / layout.legendColumns));
   const legendTop = withHeader ? 126 : 30;
   const firstPanelTop = legendTop + legendRows * 22 + 30;
   const placed: { spec: PanelSpec; box: Box }[] = [];
@@ -198,13 +244,13 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
     // clear the right panel's y axis labels.
     const columns: [number, number][] =
       panelRow.length === 1
-        ? [[LEFT, right]]
+        ? [[margin, right]]
         : [
-            [LEFT, split - 60],
+            [margin, split - 60],
             [split + 70, right],
           ];
     panelRow.forEach((spec, index) => {
-      const [left, columnRight] = columns[index] ?? [LEFT, right];
+      const [left, columnRight] = columns[index] ?? [margin, right];
       placed.push({ spec, box: { top: panelTop, bottom, left, right: columnRight } });
     });
     panelTop = bottom + PANEL_GAP;
@@ -212,22 +258,24 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const captionTop = (placed.at(-1)?.box.bottom ?? firstPanelTop) + 58;
   const captionText = wrapAll(
     captionLines(report, options, series, rankedModels),
-    width - LEFT * 2,
+    width - margin * 2,
   );
   const height = captionTop + captionText.length * 15 + 16;
 
   const parts: string[] = [
     `<rect x="0" y="0" width="${width}" height="${height}" fill="${TOKEN.surface}"/>`,
-    ...(withHeader ? header(report, options, width, series) : []),
-    ...legendsFor(panelRows, series, legendTop, width, options),
-    ...placed.flatMap(({ spec, box }) => panelGroup(spec, box, rows, series)),
-    ...caption(captionText, captionTop),
+    ...(withHeader ? header(report, options, width, series, layout) : []),
+    ...legendsFor(panelRows, series, legendTop, width, options, layout),
+    ...placed.flatMap(({ spec, box }) => panelGroup(spec, box, rows, series, layout)),
+    ...caption(captionText, captionTop, margin),
   ];
 
+  // The page carries both layouts, so their ids must not collide.
+  const id = layout.narrow ? '-narrow' : '';
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}"${options.interactive ? ` data-view="${options.includeCost ? 'cost' : 'tokens'}"` : ''} role="img" aria-labelledby="aiusage-chart-title aiusage-chart-desc">`,
-    `<title id="aiusage-chart-title">${escapeXml(titleOf(options))}</title>`,
-    `<desc id="aiusage-chart-desc">${escapeXml(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}"${options.interactive ? ` data-view="${options.includeCost ? 'cost' : 'tokens'}"` : ''} role="img" aria-labelledby="aiusage-chart-title${id} aiusage-chart-desc${id}">`,
+    `<title id="aiusage-chart-title${id}">${escapeXml(titleOf(options))}</title>`,
+    `<desc id="aiusage-chart-desc${id}">${escapeXml(
       chartDescription(report, options, series, rankedModels),
     )}</desc>`,
     parts.join('\n'),
@@ -534,6 +582,7 @@ function header(
   options: ChartOptions,
   width: number,
   series: readonly Series[],
+  { left: margin }: Layout,
 ): string[] {
   const rows = periodsOf(report);
   const total = options.includeCost
@@ -545,22 +594,20 @@ function header(
   const { since, until } = report.meta.range;
 
   return [
-    text(LEFT, 34, 'AIUSAGE REPORT', {
+    text(margin, 34, 'AIUSAGE REPORT', {
       size: 10.5,
       fill: TOKEN.eyebrow,
       weight: 600,
       letterSpacing: 1.6,
     }),
-    // Lime ink carries the title and the rule below it; Mint is reserved for the
-    // one data highlight, so the two greens never compete.
-    text(LEFT, 64, titleOf(options), { size: 27, fill: TOKEN.eyebrow, weight: 300 }),
+    text(margin, 64, titleOf(options), { size: 27, fill: TOKEN.eyebrow, weight: 300 }),
     text(
-      LEFT,
+      margin,
       88,
       `${since} to ${until} · ${total} across ${active} active ${periodNoun(report, active !== 1).toLowerCase()} · grouped ${report.meta.granularity} in ${report.meta.timezone}`,
       { size: 12.5, fill: TOKEN.muted },
     ),
-    `<line x1="${LEFT}" y1="100" x2="${width - LEFT}" y2="100" stroke="${TOKEN.eyebrow}" stroke-width="1"/>`,
+    `<line x1="${margin}" y1="100" x2="${width - margin}" y2="100" stroke="${TOKEN.eyebrow}" stroke-width="1"/>`,
   ];
 }
 
@@ -575,12 +622,15 @@ function legendsFor(
   top: number,
   width: number,
   options: ChartOptions,
+  layout: Layout,
 ): string[] {
   const tabs = panelRows.flat().find((spec) => spec.kind === 'tabs');
-  if (!tabs) return legend(series, top, width, options.includeCost ? 'cost' : 'tokens');
+  if (!tabs) return legend(series, top, width, options.includeCost ? 'cost' : 'tokens', layout);
   return tabs.views.flatMap((view) => [
     `<g data-layer="${layerOf(view)}">`,
-    ...(view.kind === 'mix' ? tokenClassKey(LEFT, top) : legend(series, top, width, view.measure)),
+    ...(view.kind === 'mix'
+      ? tokenClassKey(layout.left, top)
+      : legend(series, top, width, view.measure, layout)),
     '</g>',
   ]);
 }
@@ -602,22 +652,29 @@ function tokenClassKey(left: number, y: number): string[] {
   return parts;
 }
 
-function legend(series: readonly Series[], top: number, width: number, measure: Measure): string[] {
+function legend(
+  series: readonly Series[],
+  top: number,
+  width: number,
+  measure: Measure,
+  layout: Layout,
+): string[] {
+  const margin = layout.left;
   const parts: string[] = ['<g data-part="legend">'];
-  const columns = Math.min(4, Math.max(1, series.length));
-  const columnWidth = (width - LEFT - 92) / columns;
+  const columns = Math.min(layout.legendColumns, Math.max(1, series.length));
+  const columnWidth = (width - margin - (layout.narrow ? 8 : 92)) / columns;
 
   series.forEach((entry, index) => {
-    const x = LEFT + (index % columns) * columnWidth;
+    const x = margin + (index % columns) * columnWidth;
     const y = top + Math.floor(index / columns) * 22;
-    const label = truncate(entry.label, 24);
+    const label = truncate(entry.label, layout.legendLabel);
     const amount =
       measure === 'cost'
         ? formatUsd(Math.round(entry.costTotal * 1_000_000))
         : compactTokens(entry.tokenTotal);
     parts.push(
-      vendorMark(entry.vendor, x, y - 11, 12, entry.colour),
-      `<rect x="${x + 18}" y="${y - 9}" width="8" height="8" fill="${entry.colour}"/>`,
+      vendorMark(entry.vendor, x, y - 11, 12, inkOf(entry.colour)),
+      `<rect x="${x + 18}" y="${y - 9}" width="8" height="8" ${paint(entry.colour)}/>`,
       text(x + 32, y, label, { size: 12, fill: TOKEN.body }),
       text(x + 32 + labelWidth(label) + 8, y, amount, { size: 11.5, fill: TOKEN.subtle }),
     );
@@ -631,13 +688,14 @@ function panelGroup(
   box: Box,
   rows: readonly ReportRow[],
   series: readonly Series[],
+  layout: Layout,
 ): string[] {
-  if (spec.kind === 'tabs') return tabsPanel(spec, box, rows, series);
+  if (spec.kind === 'tabs') return tabsPanel(spec, box, rows, series, layout);
 
   return [
     `<g data-panel="${spec.id}">`,
-    ...panelTitle(spec, box),
-    ...panelBody(spec, box, rows, series),
+    ...panelTitle(spec, box, layout.narrow),
+    ...panelBody(spec, box, rows, series, layout),
     // Only the period panels share the figure's date axis. A ranking's rows are
     // models; a date axis under it would claim an ordering along time that
     // isn't there.
@@ -660,11 +718,16 @@ function tabsPanel(
   box: Box,
   rows: readonly ReportRow[],
   series: readonly Series[],
+  layout: Layout,
 ): string[] {
   const parts = [`<g data-panel="${spec.id}">`];
   const stacks = new Map<Measure, Stack>();
   for (const view of spec.views) {
-    parts.push(`<g data-layer="${layerOf(view)}">`, ...panelTitleText(view.title, box));
+    // On a phone the tabs take the title line; they already name the view.
+    parts.push(
+      `<g data-layer="${layerOf(view)}">`,
+      ...(layout.narrow ? [] : panelTitleText(view.title, box)),
+    );
     if (view.kind === 'mix') {
       parts.push(...mixPanel(rows, box, box.right));
     } else {
@@ -686,24 +749,26 @@ function tabsPanel(
     if (shapes.every((shape) => shape.height === 0)) return;
     const data = shapes.map((shape) => `data-${shape.measure}="${shape.y} ${shape.height}"`);
     parts.push(
-      `<rect x="${round(segment.x)}" y="${round(segment.y)}" width="${round(segment.width)}" height="${round(segment.height)}" fill="${segment.colour}" ${data.join(' ')}/>`,
+      `<rect x="${round(segment.x)}" y="${round(segment.y)}" width="${round(segment.width)}" height="${round(segment.height)}" ${paint(segment.colour)} ${data.join(' ')}/>`,
     );
   });
   parts.push(
     '</g>',
     baseline(box, box.right),
     ...axisDates(rows, box, box.right),
-    ...tabButtons(spec.views, box),
+    ...tabButtons(spec.views, box, layout.narrow),
     '</g>',
   );
   return parts;
 }
 
-/** The tabs, right-aligned on the panel's title line. */
-function tabButtons(views: readonly TabView[], box: Box): string[] {
+/** The tabs, right-aligned on the panel's title line, or in its place on a phone. */
+function tabButtons(views: readonly TabView[], box: Box, leftAligned: boolean): string[] {
   const gap = 8;
   const widths = views.map((view) => labelWidth(tabLabel(view)) * 0.9 + 26);
-  let x = box.right - widths.reduce((sum, width) => sum + width + gap, -gap);
+  let x = leftAligned
+    ? box.left
+    : box.right - widths.reduce((sum, width) => sum + width + gap, -gap);
   const parts: string[] = [];
   views.forEach((view, index) => {
     const width = round(widths[index] ?? 0);
@@ -731,6 +796,7 @@ function panelBody(
   box: Box,
   rows: readonly ReportRow[],
   series: readonly Series[],
+  layout: Layout,
 ): string[] {
   const right = box.right;
   switch (spec.kind) {
@@ -739,9 +805,9 @@ function panelBody(
     case 'stacked':
       return stackedPanel(rows, series, box, right, spec.measure);
     case 'ranked':
-      return rankedPanel(spec.rows, box, right, spec.measure);
+      return rankedPanel(spec.rows, box, right, spec.measure, layout);
     case 'cumulative':
-      return cumulativePanel(series, box, right, spec.measure);
+      return cumulativePanel(series, box, right, spec.measure, layout.endLabel);
   }
 }
 
@@ -751,7 +817,11 @@ function panelTitleText(title: string, box: Box): string[] {
   ];
 }
 
-function panelTitle(spec: Exclude<PanelSpec, { kind: 'tabs' }>, box: Box): string[] {
+function panelTitle(
+  spec: Exclude<PanelSpec, { kind: 'tabs' }>,
+  box: Box,
+  narrow: boolean,
+): string[] {
   const parts = panelTitleText(spec.title, box);
 
   // The mix panel's series are the token classes, so its key sits with it rather
@@ -772,7 +842,9 @@ function panelTitle(spec: Exclude<PanelSpec, { kind: 'tabs' }>, box: Box): strin
   // from whatever the figure's own legend is keying on (which follows
   // `options.series` and could be model, API key, or anything else) — so it
   // carries its own small key rather than relying on the legend above it.
-  if (spec.kind === 'ranked') {
+  // On a phone there is no room for it beside the title; each row's mark and
+  // `· agent` label already say whose it is.
+  if (spec.kind === 'ranked' && !narrow) {
     // Keyed off the rows themselves, so the key shows exactly the mark and
     // colour each agent's rows wear.
     const keyed = new Map<string, RankedRow>();
@@ -826,7 +898,13 @@ type Format = (value: number) => string;
 
 function formatFor(measure: Measure): Format {
   return measure === 'cost'
-    ? (value) => (value === 0 ? '$0' : formatUsd(Math.round(value * 1_000_000)))
+    ? // Whole dollars from $100 up: cents there are noise, and widen every axis label.
+      (value) =>
+        value === 0
+          ? '$0'
+          : value >= 100
+            ? `$${Math.round(value).toLocaleString('en-US')}`
+            : formatUsd(Math.round(value * 1_000_000))
     : compactTokens;
 }
 
@@ -922,6 +1000,7 @@ function cumulativePanel(
   box: Box,
   right: number,
   measure: Measure,
+  endLabel: number,
 ): string[] {
   const values = (entry: Series): number[] => (measure === 'cost' ? entry.cost : entry.tokens);
   const totals = series.map((entry) => (measure === 'cost' ? entry.costTotal : entry.tokenTotal));
@@ -944,7 +1023,7 @@ function cumulativePanel(
     });
     if (points.length === 0) continue;
     parts.push(
-      `<path d="M${points.join('L')}" fill="none" stroke="${entry.colour}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>`,
+      `<path d="M${points.join('L')}" fill="none" stroke="${inkOf(entry.colour)}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>`,
     );
     if (running > 0) {
       ends.push({
@@ -969,12 +1048,17 @@ function cumulativePanel(
   ordered.forEach((end, index) => {
     const at = round(positions[index] ?? end.y);
     parts.push(
-      `<circle cx="${round(endX)}" cy="${round(end.y)}" r="3" fill="${end.colour}"/>`,
-      vendorMark(end.vendor, round(endX) + 9, at - 9, 11, end.colour),
-      text(round(endX) + 24, at + 4, `${truncate(end.label, 16)}  ${format(end.total)}`, {
-        size: 11.5,
-        fill: TOKEN.body,
-      }),
+      `<circle cx="${round(endX)}" cy="${round(end.y)}" r="3" ${paint(end.colour)}/>`,
+      vendorMark(end.vendor, round(endX) + 9, at - 9, 11, inkOf(end.colour)),
+      text(
+        round(endX) + 24,
+        at + 4,
+        endLabel > 0 ? `${truncate(end.label, endLabel)}  ${format(end.total)}` : format(end.total),
+        {
+          size: 11.5,
+          fill: TOKEN.body,
+        },
+      ),
     );
   });
   parts.push(baseline(box, right));
@@ -1013,8 +1097,9 @@ function rankedPanel(
   box: Box,
   right: number,
   measure: Measure,
+  layout: Layout,
 ): string[] {
-  const axisLeft = box.left + RANK_LEFT_MARGIN;
+  const axisLeft = box.left + layout.rankLeft;
   const max = Math.max(0, ...models.map((model) => model.value));
   const top = axisMax(max);
   const step = niceStep(max);
@@ -1022,12 +1107,22 @@ function rankedPanel(
   const x = (value: number) => axisLeft + (value / (top > 0 ? top : 1)) * (right - axisLeft);
 
   const parts: string[] = [];
-  for (let value = 0; value <= top + step / 2; value += step) {
+  // Every gridline, but a label only where it clears its neighbour (~64 units).
+  const stride = Math.max(1, Math.ceil(64 / (x(step) - x(0) || 64)));
+  for (let value = 0, index = 0; value <= top + step / 2; value += step, index++) {
     const at = round(x(value));
     parts.push(
       `<line x1="${at}" y1="${box.top - 4}" x2="${at}" y2="${box.bottom}" stroke="${TOKEN.grid}" stroke-width="1"/>`,
-      text(at, box.bottom + 16, format(value), { size: 10.5, fill: TOKEN.muted, anchor: 'middle' }),
     );
+    if (index % stride === 0) {
+      parts.push(
+        text(at, box.bottom + 16, format(value), {
+          size: 10.5,
+          fill: TOKEN.muted,
+          anchor: 'middle',
+        }),
+      );
+    }
   }
 
   models.forEach((model, index) => {
@@ -1037,17 +1132,19 @@ function rankedPanel(
     // fits in one row height — the caption spells out what it means.
     const name = model.isOther ? model.label : displayModel(model.label);
     const shown = model.agentLabel ? `${name} · ${model.agentLabel}` : name;
-    const label = truncate(shown, model.mixedAgent ? 27 : 30) + (model.mixedAgent ? ' †' : '');
+    const label =
+      truncate(shown, layout.rankLabel - (model.mixedAgent ? 3 : 0)) +
+      (model.mixedAgent ? ' †' : '');
 
     parts.push(
-      vendorMark(model.vendor, axisLeft - 26, y - 6, 12, colour),
+      vendorMark(model.vendor, axisLeft - 26, y - 6, 12, inkOf(colour)),
       // The short name is for reading; the full id stays one hover away.
       `<g><title>${escapeXml(model.label)}</title>${text(axisLeft - 36, y + 4, label, { size: 11.5, fill: TOKEN.body, anchor: 'end' })}</g>`,
     );
     if (model.value > 0) {
       const at = round(x(model.value));
       parts.push(
-        `<circle cx="${at}" cy="${round(y)}" r="3.5" fill="${colour}"/>`,
+        `<circle cx="${at}" cy="${round(y)}" r="3.5" ${paint(colour)}/>`,
         text(at + 10, y + 4, format(model.value), { size: 11, fill: TOKEN.subtle }),
       );
     }
@@ -1184,6 +1281,17 @@ export function captionLines(
   if (report.meta.priceSources.length > 0) {
     lines.push(`Unit prices: ${report.meta.priceSources.join(', ')}.`);
   }
+  const local = report.meta.providers.find((provider) => provider.id === 'ccusage');
+  if (report.meta.costIncluded && local && local.recordCount > 0) {
+    // ccusage prices every past day at the table it loads today; only the
+    // platforms' own rows carry the price that was billed on the day.
+    const kept = report.meta.notices.some((notice) => notice.code === 'local-ledger-used')
+      ? ' Rows kept in the local ledger carry the prices in force when they were recorded.'
+      : '';
+    lines.push(
+      `Local agent cost is priced at today's unit prices, not those in force on the day.${kept}`,
+    );
+  }
 
   lines.push(...concentrationCaption(report));
 
@@ -1238,11 +1346,11 @@ function gapsIn(report: PeriodReport, rowCount: number): boolean {
   return rowCount > 0 && rowCount < days;
 }
 
-function caption(lines: readonly string[], top: number): string[] {
+function caption(lines: readonly string[], top: number, margin: number): string[] {
   return [
-    `<line x1="${LEFT}" y1="${top - 22}" x2="${LEFT + 300}" y2="${top - 22}" stroke="${TOKEN.rule}" stroke-width="1"/>`,
+    `<line x1="${margin}" y1="${top - 22}" x2="${margin + 300}" y2="${top - 22}" stroke="${TOKEN.rule}" stroke-width="1"/>`,
     ...lines.map((line, index) =>
-      text(LEFT, top + index * 15, line, { size: 10.5, fill: TOKEN.subtle }),
+      text(margin, top + index * 15, line, { size: 10.5, fill: TOKEN.subtle }),
     ),
   ];
 }
@@ -1300,7 +1408,15 @@ function text(x: number, y: number, content: string, options: TextOptions): stri
 }
 
 function rect(x: number, y: number, width: number, height: number, fill: string): string {
-  return `<rect x="${round(x)}" y="${round(y)}" width="${round(width)}" height="${round(height)}" fill="${fill}"/>`;
+  return `<rect x="${round(x)}" y="${round(y)}" width="${round(width)}" height="${round(height)}" ${paint(fill)}/>`;
+}
+
+/** A fill, edged in its own darker ink when it would vanish into the white. */
+function paint(colour: string): string {
+  const edge = inkOf(colour);
+  return edge === colour
+    ? `fill="${colour}"`
+    : `fill="${colour}" stroke="${edge}" stroke-width="0.75"`;
 }
 
 /** Approximate advance width for Inter at 12px — only used to place labels. */

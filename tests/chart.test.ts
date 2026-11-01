@@ -111,7 +111,7 @@ function report(
 const OPTIONS = { series: 'provider' as const, includeCost: true };
 
 /** Cache-read: the lightest stop of the sequential ramp the mix panel uses. */
-const TOKEN_CLASS_COLOUR = '#CFE3A3';
+const TOKEN_CLASS_COLOUR = '#CFCFCF';
 
 /** A panel's own markup, so an assertion cannot accidentally match another panel. */
 function panel(svg: string, id: string): string {
@@ -241,6 +241,68 @@ describe('report figure', () => {
     expect(svg).toContain('litellm@2026-07-26');
   });
 
+  it("says local cost is priced today, since ccusage re-prices past days at today's table", () => {
+    const svg = renderReportSvg(
+      report([row('2026-07-25', { anthropic: 2 })], {
+        providers: [
+          {
+            id: 'ccusage',
+            label: 'Local agents',
+            status: 'ok',
+            capabilities: {
+              usage: true,
+              reportedCost: false,
+              splitByModel: true,
+              splitByApiKey: false,
+              splitByAccount: false,
+              splitByWorkspace: false,
+              livePricing: true,
+              hourly: false,
+              maxLookbackDays: null,
+            },
+            identity: null,
+            recordCount: 3,
+            costSource: 'imported',
+          },
+        ],
+        notices: [
+          { provider: 'ccusage', level: 'info', code: 'local-ledger-used', message: 'kept' },
+        ],
+      }),
+      OPTIONS,
+    );
+    expect(svg).toContain('priced at today');
+    expect(svg).toContain('Rows kept in the local ledger');
+  });
+
+  it('draws a phone-width figure beside the desktop one, with its own ids', () => {
+    const html = renderReportHtml(report([row('2026-07-25', { anthropic: 2 })]), OPTIONS);
+    expect(html).toContain('<figure class="narrow">');
+    expect(html).toContain('id="aiusage-chart-title-narrow"');
+    expect(html.match(/id="aiusage-chart-title"/g)).toHaveLength(1);
+  });
+
+  it('edges a colour too light for white instead of letting it vanish', () => {
+    const svg = renderReportSvg(report([row('2026-07-25', { openrouter: 2 })]), OPTIONS);
+    expect(svg).toMatch(/fill="#C8FF01" stroke="#[0-9A-F]{6}"/);
+  });
+
+  it('projects month and quarter from cost to date plus the run rate, and the year as run rate when the window starts later', () => {
+    const days = Array.from({ length: 25 }, (_, index) =>
+      row(`2026-07-${String(index + 1).padStart(2, '0')}`, { anthropic: 1 }),
+    );
+    const html = renderReportHtml(
+      report(days, { range: { since: '2026-07-01', until: '2026-07-25' } }),
+      OPTIONS,
+    );
+    expect(html).toContain('$1.00/day');
+    expect(html).toContain('July · projected');
+    expect(html).toContain('≈ $31.00');
+    expect(html).toContain('≈ $92.00');
+    expect(html).toContain('2026 · run rate');
+    expect(html).toContain('≈ $365.00');
+  });
+
   it('says in the caption when cost was not collected', () => {
     const svg = renderReportSvg(report([row('2026-07-25', { anthropic: 0 })]), {
       series: 'provider',
@@ -288,8 +350,9 @@ describe('report figure', () => {
     const html = renderReportHtml(data, OPTIONS);
     expect(html).toContain('<g data-panel="per-period">');
     for (const view of ['cost', 'tokens', 'mix']) {
-      // Each view has its own legend and scaffold layer, and a tab to show it.
-      expect(html.match(new RegExp(`<g data-layer="${view}">`, 'g'))?.length).toBe(2);
+      // Each view has its own legend and scaffold layer, and a tab to show it —
+      // once in the desktop figure and once in the phone one.
+      expect(html.match(new RegExp(`<g data-layer="${view}">`, 'g'))?.length).toBe(4);
       expect(html).toContain(`data-show="${view}"`);
     }
     // One set of bars carries both measures' geometry, so a switch can animate it.
