@@ -148,6 +148,9 @@ type RankedRow = {
   unattributed?: boolean;
 };
 
+/** The narrowest per-period slot the figure will draw: ~an 8px bar plus its air. */
+const MIN_SLOT = 13;
+
 const PANEL_HEIGHT = 150;
 const PANEL_GAP = 74;
 const RANK_ROW_HEIGHT = 22;
@@ -214,8 +217,13 @@ const SERIES_NOUN: Record<SplitDimension, string> = {
 
 export function renderReportSvg(report: PeriodReport, options: ChartOptions): string {
   const rows = periodsOf(report);
-  const width = options.width ?? 960;
-  const layout = layoutFor(width);
+  const requested = options.width ?? 960;
+  // A bar under ~8px stops reading as a bar. When the window holds more periods
+  // than the requested width can honour at that minimum, the figure widens — the
+  // page scrolls it inside the figure rather than squeezing the bars away — and
+  // says so with `data-expanded`, so the page knows to allow that scroll.
+  const width = Math.max(requested, layoutWidthFloor(requested, rows.length));
+  const layout = layoutFor(requested);
   const margin = layout.left;
   const right = width - layout.rightMargin;
   const series = buildSeries(rows, options);
@@ -273,7 +281,7 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   // The page carries both layouts, so their ids must not collide.
   const id = layout.narrow ? '-narrow' : '';
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}"${options.interactive ? ` data-view="${options.includeCost ? 'cost' : 'tokens'}"` : ''} role="img" aria-labelledby="aiusage-chart-title${id} aiusage-chart-desc${id}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}"${width > requested ? ' data-expanded' : ''}${options.interactive ? ` data-view="${options.includeCost ? 'cost' : 'tokens'}"` : ''} role="img" aria-labelledby="aiusage-chart-title${id} aiusage-chart-desc${id}">`,
     `<title id="aiusage-chart-title${id}">${escapeXml(titleOf(options))}</title>`,
     `<desc id="aiusage-chart-desc${id}">${escapeXml(
       chartDescription(report, options, series, rankedModels),
@@ -1319,6 +1327,29 @@ export function captionLines(
   return lines;
 }
 
+/**
+ * The caption as plain text, for the page's collapsible provenance block. The
+ * SVG keeps its own drawn copy, so a forwarded figure still carries it.
+ */
+export function figureCaption(report: PeriodReport, options: ChartOptions): string[] {
+  const rows = periodsOf(report);
+  const series = buildSeries(rows, options);
+  const agentColours = new Map(
+    options.series === 'agent' ? series.map((one) => [one.key, one.colour] as const) : [],
+  );
+  return captionLines(
+    report,
+    options,
+    series,
+    buildModelRanking(rows, options.includeCost ? 'cost' : 'tokens', agentColours),
+  );
+}
+
+function layoutWidthFloor(requested: number, periods: number): number {
+  const layout = layoutFor(requested);
+  return layout.left + layout.rightMargin + periods * MIN_SLOT;
+}
+
 function concentrationCaption(report: PeriodReport): string[] {
   const concentration = report.statistics.concentration;
   if (!concentration || concentration.activePeriods < 2) return [];
@@ -1348,10 +1379,12 @@ function gapsIn(report: PeriodReport, rowCount: number): boolean {
 
 function caption(lines: readonly string[], top: number, margin: number): string[] {
   return [
+    '<g data-part="caption">',
     `<line x1="${margin}" y1="${top - 22}" x2="${margin + 300}" y2="${top - 22}" stroke="${TOKEN.rule}" stroke-width="1"/>`,
     ...lines.map((line, index) =>
       text(margin, top + index * 15, line, { size: 10.5, fill: TOKEN.subtle }),
     ),
+    '</g>',
   ];
 }
 

@@ -402,6 +402,51 @@ describe('report figure', () => {
     expect(html).not.toMatch(/<(img|use|image)\b[^>]*(src|href)=/);
   });
 
+  it('widens the figure rather than drawing sub-minimum bars, and the page scrolls it inside the figure', () => {
+    const svgFor = (count: number) =>
+      renderReportSvg(
+        report(
+          Array.from({ length: count }, (_unused, index) =>
+            row(`2026-07-${String((index % 28) + 1).padStart(2, '0')}`, { anthropic: 1 }),
+          ),
+        ),
+        OPTIONS,
+      );
+    // 30 periods leave ~28px per slot at the default width; nothing to widen.
+    expect(svgFor(30)).not.toContain('data-expanded');
+    // 90 periods would draw ~6px bars, so the figure widens to hold 13px slots.
+    const wide = svgFor(90);
+    expect(wide).toContain('data-expanded');
+    expect(wide).toContain('viewBox="0 0 1414 ');
+    expect(wide).toContain('width="8.1"');
+    // The page lets the expanded figure scroll inside the figure, not the page.
+    const html = renderReportHtml(report([]), OPTIONS);
+    expect(html).toContain('figure > svg[data-expanded] { width: auto; min-width: 100%;');
+    expect(html).toContain('figure { margin: 32px 0 0; overflow-x: auto;');
+  });
+
+  it('spoilers the provenance caption on the page and keeps the SVG copy for print', () => {
+    const html = renderReportHtml(report([row('2026-07-25', { anthropic: 2 })]), OPTIONS);
+    expect(html).toContain('<details class="provenance">');
+    expect(html).toContain('<summary>Method and provenance</summary>');
+    expect(html).toContain('Cost provenance: reported');
+    // On screen the drawn caption hides and the details carries the text; in
+    // print it is the other way round, so the printed page keeps its provenance.
+    expect(html).toContain('svg [data-part="caption"] { display: none; }');
+    expect(html).toContain('svg [data-part="caption"] { display: inline; }');
+    expect(html).toContain('.provenance { display: none; }');
+  });
+
+  it('marks the token-class table columns so a phone can fold them away', () => {
+    const html = renderReportHtml(report([row('2026-07-25', { anthropic: 2 })]), OPTIONS);
+    expect(html).toContain(
+      '.col-models, .col-input, .col-output, .col-cache-w, .col-cache-r { display: none; }',
+    );
+    for (const cls of ['class="left col-models"', 'class="col-input"', 'class="col-cache-r"']) {
+      expect(html).toContain(cls);
+    }
+  });
+
   it('draws cache reads as a pie of the input side and concentration as a share bar', () => {
     const data = report(
       [row('2026-07-24', { anthropic: 1 }), row('2026-07-25', { anthropic: 9 })],

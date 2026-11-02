@@ -22,6 +22,7 @@ import type { PeriodReport, ProviderSummary, ReportRow } from '../report.js';
 import {
   type ChartOptions,
   compactTokens,
+  figureCaption,
   periodNoun,
   periodsOf,
   renderReportSvg,
@@ -62,6 +63,7 @@ ${renderReportSvg(report, { ...options, header: false, interactive: true, width:
 <figure class="narrow">
 ${renderReportSvg(report, { ...options, header: false, interactive: true, width: 420 })}
 </figure>
+${provenanceDetails(report, options)}
 ${periodTable(report, rows, options)}
 ${sourceTable(report, options)}
 ${noticeList(report)}
@@ -87,9 +89,19 @@ html { color-scheme: light; }
 body { margin: 0; background: #fff; color: var(--fg); font-family: ${TOKEN.font};
        font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 main { max-width: 1100px; margin: 0 auto; padding: 40px 28px 80px; }
-figure { margin: 32px 0 0; }
+/* A figure wider than its window — many periods at the minimum bar width —
+   scrolls inside the figure, not the page. */
+figure { margin: 32px 0 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 figure.narrow { display: none; }
 svg { width: 100%; height: auto; display: block; }
+figure > svg[data-expanded] { width: auto; min-width: 100%; max-width: none; }
+
+/* The figure draws its provenance as a caption; on the page it is spoilered
+   into the details below, and print falls back to the SVG's own caption. */
+svg [data-part="caption"] { display: none; }
+.provenance { margin: 14px 0 0; border-top: 1px solid var(--grid); }
+.provenance summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 8px 0; }
+.provenance p { margin: 8px 0 0; }
 
 h1 { font-size: 34px; font-weight: 700; line-height: 1.15; color: var(--lime);
      margin: 0 0 6px; letter-spacing: -0.03em; }
@@ -193,6 +205,13 @@ svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight
   .card .value { font-size: 21px; }
   figure.wide { display: none; }
   figure.narrow { display: block; }
+  /* The per-token-class columns fold away on a phone; the mix bar in Tokens
+     carries their shares, so it grows to the cell to stay readable. */
+  .col-models, .col-input, .col-output, .col-cache-w, .col-cache-r { display: none; }
+  table { font-size: 11.5px; }
+  thead th, tbody td, tfoot td { padding: 5px 6px; }
+  .mix { width: 100%; min-width: 84px; }
+  .bar { height: 4px; }
 }
 
 @media print {
@@ -200,7 +219,9 @@ svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight
   thead th { position: static; }
   h2 { break-after: avoid; }
   tbody tr { break-inside: avoid; }
-  .table-scroll { overflow: visible; }
+  .table-scroll, figure { overflow: visible; }
+  svg [data-part="caption"] { display: inline; }
+  .provenance { display: none; }
 }`;
 }
 
@@ -451,11 +472,11 @@ function periodTable(
       const cells = [
         `<td class="left period">${escapeXml(row.period)}</td>`,
         `<td class="left">${marks(row.metadata.agents.length > 0 ? row.metadata.agents : row.metadata.providers)}</td>`,
-        `<td class="left">${modelChips(row.modelsUsed)}</td>`,
-        number(row.inputTokens),
-        number(row.outputTokens),
-        number(row.cacheCreationTokens),
-        number(row.cacheReadTokens),
+        `<td class="left col-models">${modelChips(row.modelsUsed)}</td>`,
+        number(row.inputTokens, 'col-input'),
+        number(row.outputTokens, 'col-output'),
+        number(row.cacheCreationTokens, 'col-cache-w'),
+        number(row.cacheReadTokens, 'col-cache-r'),
         `<td>${escapeXml(compactTokens(row.totalTokens))}${mixBar(row)}${
           maxTokens > 0 ? '' : ''
         }</td>`,
@@ -470,11 +491,11 @@ function periodTable(
   const totalCells = [
     `<td class="left">Total</td>`,
     '<td></td>',
-    '<td></td>',
-    number(report.totals.inputTokens),
-    number(report.totals.outputTokens),
-    number(report.totals.cacheCreationTokens),
-    number(report.totals.cacheReadTokens),
+    '<td class="col-models"></td>',
+    number(report.totals.inputTokens, 'col-input'),
+    number(report.totals.outputTokens, 'col-output'),
+    number(report.totals.cacheCreationTokens, 'col-cache-w'),
+    number(report.totals.cacheReadTokens, 'col-cache-r'),
     `<td>${escapeXml(compactTokens(report.totals.totalTokens))}</td>`,
   ];
   if (options.includeCost) {
@@ -484,17 +505,29 @@ function periodTable(
   }
 
   const head = ['', 'Sources', 'Models', 'Input', 'Output', 'Cache W', 'Cache R', 'Tokens'];
-  if (options.includeCost) head.push('Cost');
+  const headClass = [
+    'left',
+    'left',
+    'left col-models',
+    'col-input',
+    'col-output',
+    'col-cache-w',
+    'col-cache-r',
+    '',
+  ];
+  if (options.includeCost) {
+    head.push('Cost');
+    headClass.push('');
+  }
 
   return `<h2>${escapeXml(periodNoun(report, true))}</h2>
 <div class="table-scroll">
 <table>
 <caption>One row per ${noun.toLowerCase()} with usage, newest first. Cost bars share a common scale; the four-segment bar shows token mix for that ${noun.toLowerCase()} (input, output, cache write, cache read).</caption>
 <thead><tr>${head
-    .map((label, index) =>
-      index < 3
-        ? `<th scope="col" class="left">${escapeXml(label || noun)}</th>`
-        : `<th scope="col">${escapeXml(label)}</th>`,
+    .map(
+      (label, index) =>
+        `<th scope="col"${headClass[index] ? ` class="${headClass[index]}"` : ''}>${escapeXml(label || noun)}</th>`,
     )
     .join('')}</tr></thead>
 <tbody>
@@ -567,8 +600,22 @@ ${items}
 </ul>`;
 }
 
-function number(value: number): string {
-  return `<td>${value.toLocaleString('en-US')}</td>`;
+function number(value: number, cls?: string): string {
+  return `<td${cls ? ` class="${cls}"` : ''}>${value.toLocaleString('en-US')}</td>`;
+}
+
+/**
+ * The figure's provenance caption, spoilered. The SVG still draws its own copy
+ * (a forwarded figure must carry its provenance), but on the page it collapses
+ * behind this summary; print shows the SVG's caption and drops this duplicate.
+ */
+function provenanceDetails(report: PeriodReport, options: ChartOptions): string {
+  const lines = figureCaption(report, options);
+  if (lines.length === 0) return '';
+  return `<details class="provenance">
+<summary>Method and provenance</summary>
+${lines.map((line) => `<p class="note">${escapeXml(line)}</p>`).join('\n')}
+</details>`;
 }
 
 function costCell(cost: number, max: number): string {
