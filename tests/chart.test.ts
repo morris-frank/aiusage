@@ -351,8 +351,11 @@ describe('report figure', () => {
     expect(html).toContain('<g data-panel="per-period">');
     for (const view of ['cost', 'tokens', 'mix']) {
       // Each view has its own legend and scaffold layer, and a tab to show it —
-      // once in the desktop figure and once in the phone one.
-      expect(html.match(new RegExp(`<g data-layer="${view}">`, 'g'))?.length).toBe(4);
+      // once in the desktop figure and once in the phone one. Mix also has its
+      // own bars in the panning pane.
+      expect(html.match(new RegExp(`<g data-layer="${view}">`, 'g'))?.length).toBe(
+        view === 'mix' ? 6 : 4,
+      );
       expect(html).toContain(`data-show="${view}"`);
     }
     // One set of bars carries both measures' geometry, so a switch can animate it.
@@ -419,10 +422,16 @@ describe('report figure', () => {
     expect(wide).toContain('data-expanded');
     expect(wide).toContain('viewBox="0 0 1414 ');
     expect(wide).toContain('width="8.1"');
-    // The page lets the expanded figure scroll inside the figure, not the page.
-    const html = renderReportHtml(report([]), OPTIONS);
-    expect(html).toContain('figure > svg[data-expanded] { width: auto; min-width: 100%;');
-    expect(html).toContain('figure { margin: 32px 0 0; overflow-x: auto;');
+    // The page's figure keeps its width; only the per-period plot pans.
+    const page = renderReportSvg(
+      report(Array.from({ length: 90 }, () => row('2026-07-01', { anthropic: 1 }))),
+      {
+        ...OPTIONS,
+        interactive: true,
+      },
+    );
+    expect(page).not.toContain('data-expanded');
+    expect(page).toContain('data-scroll="76"');
   });
 
   it('spoilers the provenance caption on the page and keeps the SVG copy for print', () => {

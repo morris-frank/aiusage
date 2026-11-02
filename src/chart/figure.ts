@@ -219,10 +219,12 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const rows = periodsOf(report);
   const requested = options.width ?? 960;
   // A bar under ~8px stops reading as a bar. When the window holds more periods
-  // than the requested width can honour at that minimum, the figure widens — the
-  // page scrolls it inside the figure rather than squeezing the bars away — and
-  // says so with `data-expanded`, so the page knows to allow that scroll.
-  const width = Math.max(requested, layoutWidthFloor(requested, rows.length));
+  // than the requested width can honour at that minimum, a static figure widens
+  // and says so with `data-expanded`; the page's figure keeps its width and pans
+  // only the per-period plot instead (see `tabsPanel`).
+  const width = options.interactive
+    ? requested
+    : Math.max(requested, layoutWidthFloor(requested, rows.length));
   const layout = layoutFor(requested);
   const margin = layout.left;
   const right = width - layout.rightMargin;
@@ -729,6 +731,11 @@ function tabsPanel(
   layout: Layout,
 ): string[] {
   const parts = [`<g data-panel="${spec.id}">`];
+  // Bars, mix and dates sit in a pane at least MIN_SLOT per period wide; when it
+  // outgrows the panel the page pans it (`data-scroll`) under a fixed y axis.
+  const visible = box.right - box.left;
+  const inner = Math.max(visible, rows.length * MIN_SLOT);
+  const innerRight = box.left + inner;
   const stacks = new Map<Measure, Stack>();
   for (const view of spec.views) {
     // On a phone the tabs take the title line; they already name the view.
@@ -737,9 +744,9 @@ function tabsPanel(
       ...(layout.narrow ? [] : panelTitleText(view.title, box)),
     );
     if (view.kind === 'mix') {
-      parts.push(...mixPanel(rows, box, box.right));
+      parts.push(...mixGrid(box, box.right));
     } else {
-      const stack = stackOf(rows, series, box, box.right, view.measure);
+      const stack = stackOf(rows, series, box, innerRight, view.measure);
       stacks.set(view.measure, stack);
       parts.push(...grid(box, box.right, stack.max, formatFor(view.measure)));
     }
@@ -748,7 +755,16 @@ function tabsPanel(
 
   // Segments line up across measures: same period, same series, same order.
   const [first] = stacks.values();
-  parts.push('<g data-layer="bars">');
+  const top = box.top - 2;
+  const height = box.bottom - top + 32;
+  parts.push(
+    `<svg x="${box.left}" y="${top}" width="${visible}" height="${height}" viewBox="${innerRight - visible} ${top} ${visible} ${height}"${inner > visible ? ` data-scroll="${box.left}"` : ''}>`,
+    `<rect x="${box.left}" y="${top}" width="${inner}" height="${height}" fill="#fff" fill-opacity="0"/>`,
+    '<g data-layer="mix">',
+    ...mixBars(rows, box, innerRight),
+    '</g>',
+    '<g data-layer="bars">',
+  );
   first?.segments.forEach((segment, index) => {
     const shapes = [...stacks].map(([measure, stack]) => {
       const one = stack.segments[index] ?? segment;
@@ -762,8 +778,9 @@ function tabsPanel(
   });
   parts.push(
     '</g>',
+    ...axisDates(rows, box, innerRight),
+    '</svg>',
     baseline(box, box.right),
-    ...axisDates(rows, box, box.right),
     ...tabButtons(spec.views, box, layout.narrow),
     '</g>',
   );
@@ -1167,10 +1184,11 @@ function rankedPanel(
  * much of the workload is cache reads — is invisible at absolute scale.
  */
 function mixPanel(rows: readonly ReportRow[], box: Box, right: number): string[] {
-  const y = scaleOf(box, 100);
-  const { centre, width } = slots(rows.length, box.left, right);
-  const barWidth = Math.max(2, Math.min(22, width * 0.62));
+  return [...mixGrid(box, right), ...mixBars(rows, box, right), baseline(box, right)];
+}
 
+function mixGrid(box: Box, right: number): string[] {
+  const y = scaleOf(box, 100);
   const parts: string[] = [];
   for (const share of [0, 25, 50, 75, 100]) {
     const at = round(y(share));
@@ -1179,6 +1197,14 @@ function mixPanel(rows: readonly ReportRow[], box: Box, right: number): string[]
       text(box.left - 10, at + 4, `${share}%`, { size: 11, fill: TOKEN.muted, anchor: 'end' }),
     );
   }
+  return parts;
+}
+
+function mixBars(rows: readonly ReportRow[], box: Box, right: number): string[] {
+  const y = scaleOf(box, 100);
+  const { centre, width } = slots(rows.length, box.left, right);
+  const barWidth = Math.max(2, Math.min(22, width * 0.62));
+  const parts: string[] = [];
 
   rows.forEach((row, index) => {
     const counts: Record<string, number> = {
@@ -1208,7 +1234,6 @@ function mixPanel(rows: readonly ReportRow[], box: Box, right: number): string[]
     }
   });
 
-  parts.push(baseline(box, right));
   return parts;
 }
 

@@ -89,12 +89,13 @@ html { color-scheme: light; }
 body { margin: 0; background: #fff; color: var(--fg); font-family: ${TOKEN.font};
        font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
 main { max-width: 1100px; margin: 0 auto; padding: 40px 28px 80px; }
-/* A figure wider than its window — many periods at the minimum bar width —
-   scrolls inside the figure, not the page. */
-figure { margin: 32px 0 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+figure { margin: 32px 0 0; }
 figure.narrow { display: none; }
 svg { width: 100%; height: auto; display: block; }
-figure > svg[data-expanded] { width: auto; min-width: 100%; max-width: none; }
+/* Many periods at the minimum bar width: only the plot pans, under a fixed y axis. */
+svg[data-view] { touch-action: pan-y; }
+[data-scroll] { cursor: grab; }
+[data-scroll]:active { cursor: grabbing; }
 
 /* The figure draws its provenance as a caption; on the page it is spoilered
    into the details below, and print falls back to the SVG's own caption. */
@@ -219,7 +220,7 @@ svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight
   thead th { position: static; }
   h2 { break-after: avoid; }
   tbody tr { break-inside: avoid; }
-  .table-scroll, figure { overflow: visible; }
+  .table-scroll { overflow: visible; }
   svg [data-part="caption"] { display: inline; }
   .provenance { display: none; }
 }`;
@@ -266,6 +267,31 @@ function tabScript(): string {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(tab.dataset.show); }
     });
   }
+}
+for (const pane of document.querySelectorAll('svg[data-scroll]')) {
+  const [start, top, width, height] = pane.getAttribute('viewBox').split(' ').map(Number);
+  const min = Number(pane.dataset.scroll);
+  let x = start;
+  const pan = (to) => {
+    x = Math.min(start, Math.max(min, to));
+    pane.setAttribute('viewBox', x + ' ' + top + ' ' + width + ' ' + height);
+  };
+  const scale = () => pane.getScreenCTM()?.a || 1;
+  pane.addEventListener('wheel', (event) => {
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+    if (!delta) return;
+    event.preventDefault();
+    pan(x + delta / scale());
+  }, { passive: false });
+  let drag = null;
+  pane.addEventListener('pointerdown', (event) => {
+    drag = { from: event.clientX, x };
+    pane.setPointerCapture(event.pointerId);
+  });
+  pane.addEventListener('pointermove', (event) => {
+    if (drag) pan(drag.x - (event.clientX - drag.from) / scale());
+  });
+  for (const type of ['pointerup', 'pointercancel']) pane.addEventListener(type, () => { drag = null; });
 }`;
 }
 
