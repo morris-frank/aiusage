@@ -107,4 +107,20 @@ describe('local source configuration', () => {
       /AIUSAGE_LOCAL_BILLED_VIA/,
     );
   });
+
+  it('reads how each agent is actually paid for, and refuses a plan without its fee', () => {
+    expect(
+      loadConfig({
+        AIUSAGE_BILLING: 'openrouter:metered, anthropic:credits, claude:subscription:160',
+      }).billing,
+    ).toEqual(
+      new Map([
+        ['openrouter', { kind: 'metered' }],
+        ['anthropic', { kind: 'credits' }],
+        ['claude', { kind: 'subscription', monthlyUsd: 160 }],
+      ]),
+    );
+    // A fee is a stated number; a missing one must not become a free plan.
+    expect(() => loadConfig({ AIUSAGE_BILLING: 'codex:subscription' })).toThrow(/AIUSAGE_BILLING/);
+  });
 });

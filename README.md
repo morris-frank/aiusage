@@ -120,6 +120,7 @@ without credentials is **skipped and said so**.
 | `AIUSAGE_CCUSAGE_TIMEOUT_MS` | Local | Timeout for that subprocess (default 120000). |
 | `AIUSAGE_LOCAL_LEDGER` | Local | File that keeps every local row seen, so deleted agent logs never shrink a total. |
 | `AIUSAGE_LOCAL_BILLED_VIA` | Local | `agent:platform[:key name],…` — local agents a platform already bills; their local rows are dropped and that key's rows credited to the agent. |
+| `AIUSAGE_BILLING` | — | `agent:metered`, `agent:credits` or `agent:subscription:<USD/month>`, comma-separated — how each agent is actually paid for. The page then sets "actually paid" beside every API-rate cost; an agent with no stated plan stays at API rates and is named. |
 | `AIUSAGE_REPORT_DIR` | — | Where `report` saves its figure; the working directory otherwise. |
 
 OpenAI and Anthropic remain one credential each: their admin keys are org-scoped, and
@@ -381,6 +382,10 @@ npm pack --dry-run
 
 ## Known limits
 
+- "Actually paid" (`AIUSAGE_BILLING`) is the operator's statement, not a billed figure: a
+  subscription is spread over the window at its monthly fee (a year's fees over 365 days)
+  whether or not it was held throughout, and usage billed beyond a subscription (Claude's
+  extra usage) is reported by no API, so it is absent. `UNRESOLVED`.
 - Together AI is not a source at all: it exposes no usage API (see above), so Together spend
   is absent from every total here rather than reported as unknown.
 - OpenAI: only *completions* usage is collected; other products' cost lands in

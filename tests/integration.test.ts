@@ -52,6 +52,7 @@ const CONFIG: RuntimeConfig = {
   ccusageTimeoutMs: 120_000,
   localBilledVia: new Map(),
   localLedger: null,
+  billing: new Map(),
 };
 
 const ROUTES: StubRoute[] = [
@@ -411,7 +412,9 @@ describe('the top models panel over mixed-agent local rows', () => {
     expect(rank).toContain('>Opus 4.6 · agent unknown<');
     // The ranking wears the top graph's colour for the agent.
     const legend = (agent: string) =>
-      new RegExp(`<rect [^>]*fill="(#[0-9A-F]{6})"/>\\s*<text [^>]*>${agent}<`).exec(svg)?.[1];
+      new RegExp(
+        `fill="(#[0-9A-F]{6})" fill-rule="evenodd">(?:<path [^>]*/>)+</g>\\s*<text [^>]*>${agent}<`,
+      ).exec(svg)?.[1];
     const dot = (agent: string) =>
       new RegExp(`Opus 4\\.6 · ${agent}</text></g>\\s*<circle [^>]*fill="(#[0-9A-F]{6})"`).exec(
         rank,

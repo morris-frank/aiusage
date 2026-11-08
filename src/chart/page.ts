@@ -15,6 +15,7 @@
  * desktop figure leaves its labels unreadably small on a phone.
  */
 
+import type { BillingPlan } from '../config.js';
 import type { CostSource } from '../cost.js';
 import { addDays, dayKey, daysBetween } from '../dates.js';
 import { formatUsd } from '../money.js';
@@ -97,9 +98,8 @@ svg[data-view] { touch-action: pan-y; }
 [data-scroll] { cursor: grab; }
 [data-scroll]:active { cursor: grabbing; }
 
-/* The figure draws its provenance as a caption; on the page it is spoilered
-   into the details below, and print falls back to the SVG's own caption. */
-svg [data-part="caption"] { display: none; }
+/* A bare SVG draws its provenance as a caption; the page's figure leaves it to
+   the details below, which print opens (see the script). */
 .provenance { margin: 14px 0 0; border-top: 1px solid var(--grid); }
 .provenance summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 8px 0; }
 .provenance p { margin: 8px 0 0; }
@@ -182,18 +182,15 @@ tfoot td.left { text-align: left; }
 
 /* The figure's per-period tabs: one view's layers shown, the rest faded out. */
 svg[data-view] [data-layer] { transition: opacity 0.35s ease; }
-svg[data-view="cost"] [data-layer="tokens"], svg[data-view="cost"] [data-layer="mix"],
-svg[data-view="tokens"] [data-layer="cost"], svg[data-view="tokens"] [data-layer="mix"],
-svg[data-view="mix"] [data-layer="cost"], svg[data-view="mix"] [data-layer="tokens"],
-svg[data-view="mix"] [data-layer="bars"] { opacity: 0; pointer-events: none; }
+${viewRules()}
 [data-show] { cursor: pointer; }
 [data-show]:focus { outline: none; }
 [data-show]:focus-visible rect { stroke: var(--ink); }
-svg[data-view="cost"] [data-show="cost"] rect, svg[data-view="tokens"] [data-show="tokens"] rect,
-svg[data-view="mix"] [data-show="mix"] rect { fill: var(--soft); stroke: var(--soft); }
-svg[data-view="cost"] [data-show="cost"] text, svg[data-view="tokens"] [data-show="tokens"] text,
-svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight: 500; }
 @media (prefers-reduced-motion: reduce) { svg[data-view] [data-layer] { transition: none; } }
+.card .sub.paid { color: var(--muted); }
+/* Quantile tails of a token column: the busiest tenth inked, the quietest dimmed. */
+td.hi { background: var(--soft); color: var(--ink); font-weight: 500; }
+td.lo { color: var(--subtle); background: var(--cream); }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -221,9 +218,27 @@ svg[data-view="mix"] [data-show="mix"] text { fill: var(--soft-ink); font-weight
   h2 { break-after: avoid; }
   tbody tr { break-inside: avoid; }
   .table-scroll { overflow: visible; }
-  svg [data-part="caption"] { display: inline; }
-  .provenance { display: none; }
+  .provenance summary { display: none; }
 }`;
+}
+
+/** The figure's tab views, and the morphing bars only the two measures show. */
+const VIEWS = ['cost', 'tokens', 'mix', 'series', 'models'] as const;
+
+function viewRules(): string {
+  const hidden = VIEWS.flatMap((view) => [
+    ...VIEWS.filter((layer) => layer !== view).map(
+      (layer) => `svg[data-view="${view}"] [data-layer="${layer}"]`,
+    ),
+    ...(view === 'cost' || view === 'tokens'
+      ? []
+      : [`svg[data-view="${view}"] [data-layer="bars"]`]),
+  ]);
+  const active = (part: string) =>
+    VIEWS.map((view) => `svg[data-view="${view}"] [data-show="${view}"] ${part}`).join(', ');
+  return `${hidden.join(',\n')} { opacity: 0; pointer-events: none; }
+${active('rect')} { fill: var(--soft); stroke: var(--soft); }
+${active('text')} { fill: var(--soft-ink); font-weight: 500; }`;
 }
 
 /**
@@ -259,7 +274,7 @@ function tabScript(): string {
     for (const tab of svg.querySelectorAll('[data-show]')) {
       tab.setAttribute('aria-pressed', String(tab.dataset.show === view));
     }
-    if (view !== 'mix') morph(view);
+    if (view === 'cost' || view === 'tokens') morph(view);
   };
   for (const tab of svg.querySelectorAll('[data-show]')) {
     tab.addEventListener('click', () => show(tab.dataset.show));
@@ -292,7 +307,9 @@ for (const pane of document.querySelectorAll('svg[data-scroll]')) {
     if (drag) pan(drag.x - (event.clientX - drag.from) / scale());
   });
   for (const type of ['pointerup', 'pointercancel']) pane.addEventListener(type, () => { drag = null; });
-}`;
+}
+// The page's figure carries no caption of its own; print opens the provenance instead.
+addEventListener('beforeprint', () => { for (const one of document.querySelectorAll('details.provenance')) one.open = true; });`;
 }
 
 function headerBlock(report: PeriodReport, options: ChartOptions): string {
@@ -311,10 +328,15 @@ function cards(report: PeriodReport, options: ChartOptions): string {
   const inputSide = inputTokens + cacheCreationTokens + cacheReadTokens;
   const cacheShare = inputSide > 0 ? cacheReadTokens / inputSide : null;
 
+  const { since, until } = report.meta.range;
+  const paid = options.includeCost
+    ? paidOf(periodsOf(report), daysBetween(since, until) + 1, options.billing)
+    : null;
   const entries: {
     label: string;
     value: string;
     sub: string;
+    paid?: string;
     primary?: boolean;
     graphic?: string;
   }[] = [
@@ -324,7 +346,10 @@ function cards(report: PeriodReport, options: ChartOptions): string {
         ? formatUsd(Math.round((report.totals.totalCost ?? 0) * 1e6))
         : '—',
       // The provenance travels with the number, never a footnote away from it.
-      sub: options.includeCost ? `${report.totals.costSource}` : 'not collected (--no-cost)',
+      sub: options.includeCost
+        ? `${report.totals.costSource} at API rates`
+        : 'not collected (--no-cost)',
+      ...(paid ? { paid: paidLine(paid, 'actually paid') } : {}),
       primary: true,
     },
     {
@@ -367,11 +392,54 @@ ${entries
     (entry) => `  <div class="card">
     <div class="label">${escapeXml(entry.label)}</div>
     <div class="value${entry.primary ? ' primary' : ''}">${escapeXml(entry.value)}${entry.graphic ?? ''}</div>
-    <div class="sub">${escapeXml(entry.sub)}</div>
+    <div class="sub">${escapeXml(entry.sub)}</div>${
+      entry.paid ? `\n    <div class="sub paid">${escapeXml(entry.paid)}</div>` : ''
+    }
   </div>`,
   )
   .join('\n')}
 </div>`;
+}
+
+type Paid = { usd: number; atApiRates: string[] };
+
+/**
+ * What the rows cost out of pocket under the plans stated in `AIUSAGE_BILLING`:
+ * a metered agent its API cost, a credit-funded one nothing, a subscription its
+ * monthly fee spread over `days` (a year's fees over 365 days, used or not). An
+ * agent with no stated plan stays at its API cost and is named, never dropped.
+ * UNRESOLVED: a plan is taken to hold across the whole window; a subscription
+ * started or cancelled inside it is over-counted, and usage billed beyond a
+ * subscription (Claude's extra usage) is reported by no API, so it is absent.
+ */
+function paidOf(
+  rows: readonly ReportRow[],
+  days: number,
+  billing: ReadonlyMap<string, BillingPlan> | undefined,
+): Paid | null {
+  if (!billing || billing.size === 0) return null;
+  // Without a per-agent split there is nothing to apply a plan to.
+  if (rows.some((row) => row.totalTokens > 0 && !row.agentBreakdowns)) return null;
+  let usd = 0;
+  const atApiRates = new Set<string>();
+  for (const row of rows) {
+    for (const agent of row.agentBreakdowns ?? []) {
+      const id = agent.id ?? agent.name;
+      const plan = billing.get(id);
+      if (!plan) atApiRates.add(id);
+      if (!plan || plan.kind === 'metered') usd += agent.cost ?? 0;
+    }
+  }
+  for (const plan of billing.values()) {
+    if (plan.kind === 'subscription') usd += ((plan.monthlyUsd * 12) / 365) * days;
+  }
+  return { usd, atApiRates: [...atApiRates].sort() };
+}
+
+function paidLine(paid: Paid, noun: string, suffix = ''): string {
+  const usd = formatUsd(Math.round(paid.usd * 1e6));
+  const rest = paid.atApiRates.length > 0 ? ` · ${paid.atApiRates.join(', ')} at API rates` : '';
+  return `≈ ${usd}${suffix} ${noun}${rest}`;
 }
 
 /** Days of the run rate: four whole weeks, so weekends weigh what they do in a month. */
@@ -405,6 +473,16 @@ function projectionCards(report: PeriodReport, options: ChartOptions): string {
   if (rateDays < 7) return '';
   const rate = between(rateStart, lastComplete) / rateDays;
   const usd = (value: number) => formatUsd(Math.round(value * 1e6));
+  // The same projection out of pocket: paid to date plus the paid run rate.
+  const daily = report.daily;
+  const paidBetween = (from: string, to: string): Paid | null =>
+    paidOf(
+      daily.filter((row) => row.period >= from && row.period <= to),
+      daysBetween(from, to) + 1,
+      options.billing,
+    );
+  const paidRate = paidBetween(rateStart, lastComplete);
+  const perDay = paidRate ? { ...paidRate, usd: paidRate.usd / rateDays } : null;
 
   const [year, month] = today.split('-').map(Number) as [number, number];
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -437,28 +515,35 @@ function projectionCards(report: PeriodReport, options: ChartOptions): string {
         label: `${label} · run rate`,
         value: usd(rate * days),
         sub: `${days} days at the rate; the window starts after ${start}`,
+        paid: perDay && { ...perDay, usd: perDay.usd * days },
       };
     }
     const spent = between(start, lastComplete);
+    const paidSoFar = paidBetween(start, lastComplete);
     return {
       label: `${label} · projected`,
       value: usd(spent + rate * left),
       sub: `${usd(spent)} to date + ${left} day${left === 1 ? '' : 's'} at the rate`,
+      paid: perDay && paidSoFar && { ...perDay, usd: paidSoFar.usd + perDay.usd * left },
     };
   });
+  const paidSub = (paid: Paid | null, suffix = '') =>
+    paid
+      ? `\n    <div class="sub paid">${escapeXml(paidLine(paid, 'actually paid', suffix))}</div>`
+      : '';
 
   return `<div class="cards">
   <div class="card projected">
     <div class="label">Run rate</div>
     <div class="value">${escapeXml(usd(rate))}/day</div>
-    <div class="sub">${escapeXml(`mean of ${rateStart} to ${lastComplete}; an estimate, not billed`)}</div>
+    <div class="sub">${escapeXml(`mean of ${rateStart} to ${lastComplete}; an estimate, not billed`)}</div>${paidSub(perDay, '/day')}
   </div>
 ${entries
   .map(
     (entry) => `  <div class="card projected">
     <div class="label">${escapeXml(entry.label)}</div>
     <div class="value">≈ ${escapeXml(entry.value)}</div>
-    <div class="sub">${escapeXml(entry.sub)}</div>
+    <div class="sub">${escapeXml(entry.sub)}</div>${paidSub(entry.paid)}
   </div>`,
   )
   .join('\n')}
@@ -488,8 +573,13 @@ function periodTable(
   options: ChartOptions,
 ): string {
   const maxCost = Math.max(0, ...rows.map((row) => row.totalCost ?? 0));
-  const maxTokens = Math.max(0, ...rows.map((row) => row.totalTokens));
   const noun = periodNoun(report, false);
+  const tails = {
+    input: tailsOf(rows.map((row) => row.inputTokens)),
+    output: tailsOf(rows.map((row) => row.outputTokens)),
+    cacheW: tailsOf(rows.map((row) => row.cacheCreationTokens)),
+    cacheR: tailsOf(rows.map((row) => row.cacheReadTokens)),
+  };
 
   // Newest first: the page is read for "what happened lately".
   const body = [...rows]
@@ -499,17 +589,13 @@ function periodTable(
         `<td class="left period">${escapeXml(row.period)}</td>`,
         `<td class="left">${marks(row.metadata.agents.length > 0 ? row.metadata.agents : row.metadata.providers)}</td>`,
         `<td class="left col-models">${modelChips(row.modelsUsed)}</td>`,
-        number(row.inputTokens, 'col-input'),
-        number(row.outputTokens, 'col-output'),
-        number(row.cacheCreationTokens, 'col-cache-w'),
-        number(row.cacheReadTokens, 'col-cache-r'),
-        `<td>${escapeXml(compactTokens(row.totalTokens))}${mixBar(row)}${
-          maxTokens > 0 ? '' : ''
-        }</td>`,
+        `<td>${escapeXml(compactTokens(row.totalTokens))}${mixBar(row)}</td>`,
+        ...(options.includeCost ? [costCell(row.totalCost ?? 0, maxCost)] : []),
+        number(row.inputTokens, `col-input${tails.input(row.inputTokens)}`),
+        number(row.outputTokens, `col-output${tails.output(row.outputTokens)}`),
+        number(row.cacheCreationTokens, `col-cache-w${tails.cacheW(row.cacheCreationTokens)}`),
+        number(row.cacheReadTokens, `col-cache-r${tails.cacheR(row.cacheReadTokens)}`),
       ];
-      if (options.includeCost) {
-        cells.push(costCell(row.totalCost ?? 0, maxCost));
-      }
       return `  <tr>${cells.join('')}</tr>`;
     })
     .join('\n');
@@ -518,38 +604,43 @@ function periodTable(
     `<td class="left">Total</td>`,
     '<td></td>',
     '<td class="col-models"></td>',
+    `<td>${escapeXml(compactTokens(report.totals.totalTokens))}</td>`,
+    ...(options.includeCost
+      ? [`<td>${escapeXml(formatUsd(Math.round((report.totals.totalCost ?? 0) * 1e6)))}</td>`]
+      : []),
     number(report.totals.inputTokens, 'col-input'),
     number(report.totals.outputTokens, 'col-output'),
     number(report.totals.cacheCreationTokens, 'col-cache-w'),
     number(report.totals.cacheReadTokens, 'col-cache-r'),
-    `<td>${escapeXml(compactTokens(report.totals.totalTokens))}</td>`,
   ];
-  if (options.includeCost) {
-    totalCells.push(
-      `<td>${escapeXml(formatUsd(Math.round((report.totals.totalCost ?? 0) * 1e6)))}</td>`,
-    );
-  }
 
-  const head = ['', 'Sources', 'Models', 'Input', 'Output', 'Cache W', 'Cache R', 'Tokens'];
+  const head = [
+    '',
+    'Sources',
+    'Models',
+    'Tokens',
+    ...(options.includeCost ? ['Cost'] : []),
+    'Input',
+    'Output',
+    'Cache W',
+    'Cache R',
+  ];
   const headClass = [
     'left',
     'left',
     'left col-models',
+    '',
+    ...(options.includeCost ? [''] : []),
     'col-input',
     'col-output',
     'col-cache-w',
     'col-cache-r',
-    '',
   ];
-  if (options.includeCost) {
-    head.push('Cost');
-    headClass.push('');
-  }
 
   return `<h2>${escapeXml(periodNoun(report, true))}</h2>
 <div class="table-scroll">
 <table>
-<caption>One row per ${noun.toLowerCase()} with usage, newest first. Cost bars share a common scale; the four-segment bar shows token mix for that ${noun.toLowerCase()} (input, output, cache write, cache read).</caption>
+<caption>One row per ${noun.toLowerCase()} with usage, newest first. Cost bars share a common scale; the four-segment bar shows token mix for that ${noun.toLowerCase()} (input, output, cache write, cache read). In each token-class column the top tenth of ${periodNoun(report, true).toLowerCase()} is shaded and the bottom tenth dimmed.</caption>
 <thead><tr>${head
     .map(
       (label, index) =>
@@ -562,6 +653,19 @@ ${body}
 <tfoot><tr>${totalCells.join('')}</tr></tfoot>
 </table>
 </div>`;
+}
+
+/**
+ * Marks a value in the top or bottom tenth of its column. Fewer than ten
+ * periods have no tenth to speak of, so nothing is marked.
+ */
+function tailsOf(values: readonly number[]): (value: number) => string {
+  if (values.length < 10) return () => '';
+  const sorted = [...values].sort((a, b) => a - b);
+  const low = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? 0;
+  const high = sorted[Math.ceil((sorted.length - 1) * 0.9)] ?? 0;
+  if (low === high) return () => '';
+  return (value) => (value >= high ? ' hi' : value <= low ? ' lo' : '');
 }
 
 function sourceTable(report: PeriodReport, options: ChartOptions): string {

@@ -368,6 +368,7 @@ function emitFigure(
   const chartOptions = {
     series: seriesDimension(options.splits),
     includeCost: options.includeCost,
+    billing: config.billing,
   };
   const autoSave = options.local && !options.json && !options.out && !options.print;
   const format = options.format ?? (autoSave ? 'html' : 'svg');

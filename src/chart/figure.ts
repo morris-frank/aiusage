@@ -11,7 +11,8 @@
  *   - **token mix**, the share of each period that was uncached input, output,
  *     cache write and cache read. Absolute tokens are already in the panel above,
  *     so this one is normalised: it answers "what kind of tokens", and a caching
- *     change shows up here first;
+ *     change shows up here first. On the page two more normalised views join it:
+ *     each period's tokens by series and by top model;
  *   - **top models** beside **cumulative cost** per series, each line labelled
  *     at its end point.
  *
@@ -53,6 +54,7 @@
  */
 
 import type { SplitDimension } from '../aggregate.js';
+import type { BillingPlan } from '../config.js';
 import { formatUsd } from '../money.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../report.js';
 import {
@@ -85,6 +87,8 @@ export type ChartOptions = {
    * SVG keeps the separate panels so it loses nothing.
    */
   interactive?: boolean;
+  /** How each agent is actually paid for; the page sets out-of-pocket cost beside API cost. */
+  billing?: ReadonlyMap<string, BillingPlan>;
 };
 
 export type Series = {
@@ -122,7 +126,9 @@ type PanelSpec =
     };
 
 type MixSpec = { kind: 'mix'; id: string; title: string };
-type TabView = StackedSpec | MixSpec;
+/** Each period's tokens as shares of the figure's series, or of its top models. */
+type ShareSpec = { kind: 'share'; id: string; title: string; tab: string; of: 'series' | 'models' };
+type TabView = StackedSpec | MixSpec | ShareSpec;
 
 /** Panels are laid out in rows: one full-width panel, or two side by side. */
 type PanelRow = PanelSpec[];
@@ -155,6 +161,8 @@ const PANEL_HEIGHT = 150;
 const PANEL_GAP = 74;
 const RANK_ROW_HEIGHT = 22;
 const RANK_CAPACITY = 8;
+/** Models drawn in the model-share view before the tail folds into "Other". */
+const SHARE_MODELS = 7;
 
 /** Margins and label budgets, which a phone-width figure has to spend differently. */
 type Layout = {
@@ -228,7 +236,8 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const layout = layoutFor(requested);
   const margin = layout.left;
   const right = width - layout.rightMargin;
-  const series = buildSeries(rows, options);
+  const series = buildSeries(rows, breakdownsOf(options.series), options.includeCost);
+  const modelSeries = options.interactive ? buildModelSeries(rows) : [];
   const measure: Measure = options.includeCost ? 'cost' : 'tokens';
   // The ranking reuses the top graph's colour for an agent, so the two agree.
   const agentColours = new Map(
@@ -241,7 +250,10 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   );
 
   const withHeader = options.header !== false;
-  const legendRows = Math.max(1, Math.ceil(series.length / layout.legendColumns));
+  const legendRows = Math.max(
+    1,
+    Math.ceil(Math.max(series.length, modelSeries.length) / layout.legendColumns),
+  );
   const legendTop = withHeader ? 126 : 30;
   const firstPanelTop = legendTop + legendRows * 22 + 30;
   const placed: { spec: PanelSpec; box: Box }[] = [];
@@ -266,18 +278,19 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
     panelTop = bottom + PANEL_GAP;
   }
   const captionTop = (placed.at(-1)?.box.bottom ?? firstPanelTop) + 58;
-  const captionText = wrapAll(
-    captionLines(report, options, series, rankedModels),
-    width - margin * 2,
-  );
-  const height = captionTop + captionText.length * 15 + 16;
+  // The page carries the caption as text beside the figure (`provenanceDetails`),
+  // so its figure ends under the last axis instead of a hidden caption's height.
+  const captionText = options.interactive
+    ? []
+    : wrapAll(captionLines(report, options, series, rankedModels), width - margin * 2);
+  const height = options.interactive ? captionTop - 18 : captionTop + captionText.length * 15 + 16;
 
   const parts: string[] = [
     `<rect x="0" y="0" width="${width}" height="${height}" fill="${TOKEN.surface}"/>`,
     ...(withHeader ? header(report, options, width, series, layout) : []),
-    ...legendsFor(panelRows, series, legendTop, width, options, layout),
-    ...placed.flatMap(({ spec, box }) => panelGroup(spec, box, rows, series, layout)),
-    ...caption(captionText, captionTop, margin),
+    ...legendsFor(panelRows, series, modelSeries, legendTop, width, options, layout),
+    ...placed.flatMap(({ spec, box }) => panelGroup(spec, box, rows, series, modelSeries, layout)),
+    ...(options.interactive ? [] : caption(captionText, captionTop, margin)),
   ];
 
   // The page carries both layouts, so their ids must not collide.
@@ -332,8 +345,24 @@ function panelSpecs(
   const cost = { kind: 'stacked', id: 'cost-daily', title: `${cadence} cost`, measure } as const;
   const mix = { kind: 'mix', id: 'token-mix', title: 'Token mix' } as const;
   const perPeriod: StackedSpec[] = options.includeCost ? [cost, tokens] : [tokens];
+  const shares: ShareSpec[] = [
+    {
+      kind: 'share',
+      id: 'series-share',
+      title: `Token share by ${SERIES_NOUN[options.series]}`,
+      tab: `${SERIES_NOUN[options.series].replace(/^./, (first) => first.toUpperCase())}s`,
+      of: 'series',
+    },
+    {
+      kind: 'share',
+      id: 'model-share',
+      title: 'Token share by model',
+      tab: 'Models',
+      of: 'models',
+    },
+  ];
   const rows: PanelRow[] = options.interactive
-    ? [[{ kind: 'tabs', id: 'per-period', views: [...perPeriod, mix] }]]
+    ? [[{ kind: 'tabs', id: 'per-period', views: [...perPeriod, mix, ...shares] }]]
     : [...perPeriod.map((spec) => [spec]), [mix]];
 
   // The ranking and the accumulation share a row: both answer "where did the
@@ -376,27 +405,112 @@ function measureOf(breakdown: DimensionBreakdown, measure: Measure): number {
   return measure === 'cost' ? (breakdown.cost ?? 0) : breakdown.totalTokens;
 }
 
-function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[] {
-  const key = BREAKDOWN_KEY[options.series];
+/** One row's contribution to one series, whichever breakdown it came from. */
+type SeriesPart = { id: string; name: string; cost: number; tokens: number; models: string[] };
+
+function breakdownsOf(dimension: SplitDimension): (row: ReportRow) => SeriesPart[] {
+  const key = BREAKDOWN_KEY[dimension];
+  return (row) =>
+    ((row[key] as DimensionBreakdown[] | undefined) ?? []).map((breakdown) => ({
+      id: breakdown.id ?? breakdown.name,
+      name: breakdown.name || (breakdown.id ?? ''),
+      cost: measureOf(breakdown, 'cost'),
+      tokens: measureOf(breakdown, 'tokens'),
+      models: breakdown.models ?? [],
+    }));
+}
+
+/**
+ * The top models by tokens, snapshots merged under their display name, and the
+ * tail folded into one disclosed "Other" series so the shares still sum to 100.
+ * Models of one vendor take shades of its colour rather than another vendor's
+ * hue, so a colour never claims the wrong maker.
+ */
+function buildModelSeries(rows: readonly ReportRow[]): Series[] {
+  const all = buildSeries(
+    rows,
+    (row) =>
+      row.modelBreakdowns.map((model) => ({
+        id: displayModel(model.modelName),
+        name: displayModel(model.modelName),
+        cost: model.cost ?? 0,
+        tokens:
+          model.inputTokens +
+          model.outputTokens +
+          model.cacheCreationTokens +
+          model.cacheReadTokens,
+        models: [model.modelName],
+      })),
+    false,
+  );
+  const shown = all.length > SHARE_MODELS + 1 ? all.slice(0, SHARE_MODELS) : all;
+  const seen = new Map<string, number>();
+  for (const entry of shown) {
+    const base = vendorColour(entry.vendor);
+    const step = seen.get(base) ?? 0;
+    seen.set(base, step + 1);
+    entry.colour = shadeOf(base, step);
+  }
+  const tail = all.slice(shown.length);
+  if (tail.length === 0) return shown;
+  const sumAt = (pick: (entry: Series) => number[]) =>
+    rows.map((_row, index) => tail.reduce((sum, entry) => sum + (pick(entry)[index] ?? 0), 0));
+  const tokens = sumAt((entry) => entry.tokens);
+  const cost = sumAt((entry) => entry.cost);
+  return [
+    ...shown,
+    {
+      key: 'other-models',
+      label: `Other ${tail.length} models`,
+      colour: TOKEN.grid,
+      vendor: 'other',
+      cost,
+      tokens,
+      costTotal: cost.reduce((sum, one) => sum + one, 0),
+      tokenTotal: tokens.reduce((sum, one) => sum + one, 0),
+    },
+  ];
+}
+
+/** The vendor colour, then alternately darker and lighter steps of it. */
+function shadeOf(colour: string, step: number): string {
+  if (step === 0) return colour;
+  const amount = Math.ceil(step / 2) * 0.28;
+  const towards = step % 2 === 1 ? 0 : 255;
+  const mixed = [1, 3, 5].map((at) => {
+    const channel = Number.parseInt(colour.slice(at, at + 2), 16);
+    return Math.round(channel + (towards - channel) * Math.min(amount, 0.8));
+  });
+  return `#${mixed
+    .map((channel) => channel.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()}`;
+}
+
+function buildSeries(
+  rows: readonly ReportRow[],
+  partsOf: (row: ReportRow) => SeriesPart[],
+  byCost: boolean,
+): Series[] {
   const found = new Map<
     string,
     { label: string; cost: number[]; tokens: number[]; models: Set<string> }
   >();
 
   rows.forEach((row, index) => {
-    for (const breakdown of (row[key] as DimensionBreakdown[] | undefined) ?? []) {
-      const id = breakdown.id ?? breakdown.name;
+    for (const part of partsOf(row)) {
+      const id = part.id;
       const entry =
         found.get(id) ??
         ({
-          label: breakdown.name || id,
+          label: part.name || id,
           cost: new Array<number>(rows.length).fill(0),
           tokens: new Array<number>(rows.length).fill(0),
           models: new Set<string>(),
         } satisfies { label: string; cost: number[]; tokens: number[]; models: Set<string> });
-      entry.cost[index] = (entry.cost[index] ?? 0) + measureOf(breakdown, 'cost');
-      entry.tokens[index] = (entry.tokens[index] ?? 0) + measureOf(breakdown, 'tokens');
-      for (const model of breakdown.models ?? []) entry.models.add(model);
+      entry.cost[index] = (entry.cost[index] ?? 0) + part.cost;
+      entry.tokens[index] = (entry.tokens[index] ?? 0) + part.tokens;
+      for (const model of part.models) entry.models.add(model);
       found.set(id, entry);
     }
   });
@@ -431,7 +545,7 @@ function buildSeries(rows: readonly ReportRow[], options: ChartOptions): Series[
       // Largest first, so the primary highlight lands on the series that matters
       // and the stack order is stable across renders.
       .sort((a, b) =>
-        options.includeCost
+        byCost
           ? b.costTotal - a.costTotal || b.tokenTotal - a.tokenTotal || a.key.localeCompare(b.key)
           : b.tokenTotal - a.tokenTotal || a.key.localeCompare(b.key),
       )
@@ -629,6 +743,7 @@ function header(
 function legendsFor(
   panelRows: readonly PanelRow[],
   series: readonly Series[],
+  modelSeries: readonly Series[],
   top: number,
   width: number,
   options: ChartOptions,
@@ -640,12 +755,15 @@ function legendsFor(
     `<g data-layer="${layerOf(view)}">`,
     ...(view.kind === 'mix'
       ? tokenClassKey(layout.left, top)
-      : legend(series, top, width, view.measure, layout)),
+      : view.kind === 'share'
+        ? legend(view.of === 'models' ? modelSeries : series, top, width, 'tokens', layout)
+        : legend(series, top, width, view.measure, layout)),
     '</g>',
   ]);
 }
 
 function layerOf(view: TabView): string {
+  if (view.kind === 'share') return view.of;
   return view.kind === 'mix' ? 'mix' : view.measure;
 }
 
@@ -683,10 +801,10 @@ function legend(
         ? formatUsd(Math.round(entry.costTotal * 1_000_000))
         : compactTokens(entry.tokenTotal);
     parts.push(
+      // The mark, in the series colour, is the key: no swatch beside it.
       vendorMark(entry.vendor, x, y - 11, 12, inkOf(entry.colour)),
-      `<rect x="${x + 18}" y="${y - 9}" width="8" height="8" ${paint(entry.colour)}/>`,
-      text(x + 32, y, label, { size: 12, fill: TOKEN.body }),
-      text(x + 32 + labelWidth(label) + 8, y, amount, { size: 11.5, fill: TOKEN.subtle }),
+      text(x + 18, y, label, { size: 12, fill: TOKEN.body }),
+      text(x + 18 + labelWidth(label) + 8, y, amount, { size: 11.5, fill: TOKEN.subtle }),
     );
   });
   parts.push('</g>');
@@ -698,9 +816,10 @@ function panelGroup(
   box: Box,
   rows: readonly ReportRow[],
   series: readonly Series[],
+  modelSeries: readonly Series[],
   layout: Layout,
 ): string[] {
-  if (spec.kind === 'tabs') return tabsPanel(spec, box, rows, series, layout);
+  if (spec.kind === 'tabs') return tabsPanel(spec, box, rows, series, modelSeries, layout);
 
   return [
     `<g data-panel="${spec.id}">`,
@@ -728,6 +847,7 @@ function tabsPanel(
   box: Box,
   rows: readonly ReportRow[],
   series: readonly Series[],
+  modelSeries: readonly Series[],
   layout: Layout,
 ): string[] {
   const parts = [`<g data-panel="${spec.id}">`];
@@ -743,7 +863,7 @@ function tabsPanel(
       `<g data-layer="${layerOf(view)}">`,
       ...(layout.narrow ? [] : panelTitleText(view.title, box)),
     );
-    if (view.kind === 'mix') {
+    if (view.kind === 'mix' || view.kind === 'share') {
       parts.push(...mixGrid(box, box.right));
     } else {
       const stack = stackOf(rows, series, box, innerRight, view.measure);
@@ -763,6 +883,15 @@ function tabsPanel(
     '<g data-layer="mix">',
     ...mixBars(rows, box, innerRight),
     '</g>',
+    ...spec.views.flatMap((view) =>
+      view.kind === 'share'
+        ? [
+            `<g data-layer="${view.of}">`,
+            ...shareBars(view.of === 'models' ? modelSeries : series, rows.length, box, innerRight),
+            '</g>',
+          ]
+        : [],
+    ),
     '<g data-layer="bars">',
   );
   first?.segments.forEach((segment, index) => {
@@ -813,7 +942,8 @@ function tabButtons(views: readonly TabView[], box: Box, leftAligned: boolean): 
 }
 
 function tabLabel(view: TabView): string {
-  return view.kind === 'mix' ? 'Token mix' : view.measure === 'cost' ? 'Cost' : 'Tokens';
+  if (view.kind === 'share') return view.tab;
+  return view.kind === 'mix' ? 'Mix' : view.measure === 'cost' ? 'Cost' : 'Tokens';
 }
 
 function panelBody(
@@ -1237,6 +1367,30 @@ function mixBars(rows: readonly ReportRow[], box: Box, right: number): string[] 
   return parts;
 }
 
+/** Each period's tokens as shares of the given series, stacked to 100%. */
+function shareBars(series: readonly Series[], count: number, box: Box, right: number): string[] {
+  const y = scaleOf(box, 100);
+  const { centre, width } = slots(count, box.left, right);
+  const barWidth = Math.max(2, Math.min(22, width * 0.62));
+  const parts: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const total = series.reduce((sum, entry) => sum + (entry.tokens[index] ?? 0), 0);
+    if (total <= 0) continue;
+    let base = 0;
+    for (const entry of series) {
+      const share = ((entry.tokens[index] ?? 0) / total) * 100;
+      if (share <= 0) continue;
+      const top = y(base + share);
+      const bottom = y(base);
+      base += share;
+      parts.push(
+        `<rect x="${round(centre(index) - barWidth / 2)}" y="${round(top)}" width="${round(barWidth)}" height="${round(Math.max(0.6, bottom - top))}" ${paint(entry.colour)}/>`,
+      );
+    }
+  }
+  return parts;
+}
+
 function axisDates(rows: readonly ReportRow[], box: Box, right: number): string[] {
   if (rows.length === 0) return [];
   const { centre } = slots(rows.length, box.left, right);
@@ -1353,12 +1507,13 @@ export function captionLines(
 }
 
 /**
- * The caption as plain text, for the page's collapsible provenance block. The
- * SVG keeps its own drawn copy, so a forwarded figure still carries it.
+ * The caption as plain text, for the page's collapsible provenance block. A
+ * bare SVG draws its own copy, so a forwarded figure still carries it; the
+ * page's figure leaves it to this block, which print opens.
  */
 export function figureCaption(report: PeriodReport, options: ChartOptions): string[] {
   const rows = periodsOf(report);
-  const series = buildSeries(rows, options);
+  const series = buildSeries(rows, breakdownsOf(options.series), options.includeCost);
   const agentColours = new Map(
     options.series === 'agent' ? series.map((one) => [one.key, one.colour] as const) : [],
   );

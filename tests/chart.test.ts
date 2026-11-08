@@ -358,6 +358,12 @@ describe('report figure', () => {
       );
       expect(html).toContain(`data-show="${view}"`);
     }
+    // Shares of the series and of the models are views of their own, with their own bars.
+    for (const view of ['series', 'models']) {
+      expect(html.match(new RegExp(`<g data-layer="${view}">`, 'g'))?.length).toBe(6);
+      expect(html).toContain(`svg[data-view="${view}"] [data-layer="bars"]`);
+    }
+    expect(html).toContain('Token share by provider');
     // One set of bars carries both measures' geometry, so a switch can animate it.
     expect(html).toMatch(/<rect [^>]*data-cost="[\d.]+ [\d.]+" data-tokens="[\d.]+ [\d.]+"/);
     expect(html).toContain('svg[data-view="mix"] [data-layer="bars"]');
@@ -434,16 +440,53 @@ describe('report figure', () => {
     expect(page).toContain('data-scroll="76"');
   });
 
-  it('spoilers the provenance caption on the page and keeps the SVG copy for print', () => {
+  it('spoilers the provenance caption on the page, and the page figure carries no hidden copy', () => {
     const html = renderReportHtml(report([row('2026-07-25', { anthropic: 2 })]), OPTIONS);
     expect(html).toContain('<details class="provenance">');
     expect(html).toContain('<summary>Method and provenance</summary>');
     expect(html).toContain('Cost provenance: reported');
-    // On screen the drawn caption hides and the details carries the text; in
-    // print it is the other way round, so the printed page keeps its provenance.
-    expect(html).toContain('svg [data-part="caption"] { display: none; }');
-    expect(html).toContain('svg [data-part="caption"] { display: inline; }');
-    expect(html).toContain('.provenance { display: none; }');
+    // A hidden caption would still take the figure's height; print opens the details instead.
+    expect(html).not.toContain('data-part="caption"');
+    expect(html).toContain("addEventListener('beforeprint'");
+    expect(renderReportSvg(report([row('2026-07-25', { anthropic: 2 })]), OPTIONS)).toContain(
+      'data-part="caption"',
+    );
+  });
+
+  it('sets what was actually paid under the stated plans beside the API cost', () => {
+    const days = Array.from({ length: 10 }, (_, index) => {
+      const day = row(`2026-07-${String(index + 1).padStart(2, '0')}`, {
+        claude: 5,
+        openrouter: 1,
+      });
+      day.agentBreakdowns = [
+        breakdown('claude', 5),
+        breakdown('openrouter', 1),
+        breakdown('gemini', 0.5),
+      ];
+      return day;
+    });
+    const data = report(days, { range: { since: '2026-07-01', until: '2026-07-10' } });
+    const billing = new Map([
+      ['claude', { kind: 'subscription', monthlyUsd: 36.5 } as const],
+      ['openrouter', { kind: 'metered' } as const],
+    ]);
+    const html = renderReportHtml(data, { ...OPTIONS, billing });
+    // 10 days of a $36.50/month plan is $12; OpenRouter's $10 metered; Gemini's
+    // $5 has no stated plan, so it stays at API rates and is named.
+    expect(html).toContain('≈ $27.00 actually paid · gemini at API rates');
+    expect(renderReportHtml(data, OPTIONS)).not.toContain('actually paid');
+  });
+
+  it('shades the top and bottom tenth of each token-class column', () => {
+    const days = Array.from({ length: 10 }, (_, index) => ({
+      ...row(`2026-07-${String(index + 1).padStart(2, '0')}`, { anthropic: 1 }),
+      inputTokens: (index + 1) * 100,
+    }));
+    const html = renderReportHtml(report(days), OPTIONS);
+    expect(html).toContain('<td class="col-input hi">1,000</td>');
+    expect(html).toContain('<td class="col-input lo">100</td>');
+    expect(html).toContain('<td class="col-input">500</td>');
   });
 
   it('marks the token-class table columns so a phone can fold them away', () => {

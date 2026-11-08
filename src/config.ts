@@ -106,7 +106,22 @@ export type RuntimeConfig = {
   localBilledVia: Map<string, BilledVia>;
   /** Where the local ledger lives, from `AIUSAGE_LOCAL_LEDGER`; null keeps none. */
   localLedger: string | null;
+  /** How each agent is actually paid for, from `AIUSAGE_BILLING`; empty states none. */
+  billing: Map<string, BillingPlan>;
 };
+
+/**
+ * How an agent's usage is actually paid for, as the operator states it. No API
+ * reports this — a subscription's fee or a credit grant is not in any usage
+ * endpoint — so it is configuration, never inferred.
+ */
+export type BillingPlan =
+  /** Paid per token: out of pocket is the API cost. */
+  | { kind: 'metered' }
+  /** Drawn from granted credits: nothing out of pocket. */
+  | { kind: 'credits' }
+  /** A flat monthly fee, whatever the usage. */
+  | { kind: 'subscription'; monthlyUsd: number };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 // The ccusage subprocess is not an HTTP request: it may install itself through
@@ -145,6 +160,30 @@ function billedVia(value: string | undefined): Map<string, BilledVia> {
     pairs.set(agent, { platform: id, apiKeyName: name.join(':') || null });
   }
   return pairs;
+}
+
+function billing(value: string | undefined): Map<string, BillingPlan> {
+  const plans = new Map<string, BillingPlan>();
+  for (const entry of trimmed(value)?.split(',') ?? []) {
+    const plan = planOf(entry.split(':').map((part) => part.trim()));
+    if (!plan) {
+      throw new ConfigError(
+        `AIUSAGE_BILLING entries must be agent:metered, agent:credits or agent:subscription:<USD per month>, got "${entry.trim()}"`,
+      );
+    }
+    plans.set(plan[0], plan[1]);
+  }
+  return plans;
+}
+
+function planOf([agent, kind, fee, ...rest]: string[]): [string, BillingPlan] | null {
+  if (!agent || rest.length > 0) return null;
+  if ((kind === 'metered' || kind === 'credits') && fee === undefined) return [agent, { kind }];
+  const monthlyUsd = Number(fee);
+  if (kind === 'subscription' && fee && Number.isFinite(monthlyUsd) && monthlyUsd >= 0) {
+    return [agent, { kind, monthlyUsd }];
+  }
+  return null;
 }
 
 function defaultCacheDir(env: NodeJS.ProcessEnv): string {
@@ -251,6 +290,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig 
     localBilledVia: billedVia(env.AIUSAGE_LOCAL_BILLED_VIA),
     // `directory` only expands `~/`; a file path needs exactly that too.
     localLedger: directory(env.AIUSAGE_LOCAL_LEDGER),
+    billing: billing(env.AIUSAGE_BILLING),
   };
 }
 
