@@ -78,7 +78,9 @@ describe('OpenAI provider', () => {
       },
     ]);
 
-    const result = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(ctx);
+    const result = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(ctx);
 
     expect(result.status).toBe('ok');
     const [record] = result.records;
@@ -122,7 +124,9 @@ describe('OpenAI provider', () => {
       { when: '/organization/costs', body: { data: [], has_more: false } },
     ]);
 
-    const result = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(ctx);
+    const result = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(ctx);
     expect(result.records[0]?.tokens.input).toBe(555);
   });
 
@@ -139,7 +143,9 @@ describe('OpenAI provider', () => {
       { when: '/organization/costs', body: { data: [], has_more: false } },
     ]);
 
-    const result = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(ctx);
+    const result = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(ctx);
 
     expect(result.status).toBe('partial');
     expect(result.capabilities.splitByAccount).toBe(false);
@@ -165,7 +171,9 @@ describe('OpenAI provider', () => {
       { when: '/organization/costs', body: { data: [], has_more: false } },
     ]);
 
-    const result = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(ctx);
+    const result = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(ctx);
     expect(result.records).toHaveLength(2);
   });
 
@@ -188,7 +196,9 @@ describe('OpenAI provider', () => {
       },
     ]);
 
-    const result = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(ctx);
+    const result = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(ctx);
     expect(result.costRecords).toHaveLength(0);
     expect(result.diagnostics.map((d) => d.code)).toContain('non-usd-cost');
   });
@@ -198,7 +208,9 @@ describe('OpenAI provider', () => {
       { when: '/organization/usage/completions', status: 401, body: { error: 'no' } },
     ]);
 
-    const result = await createOpenAIProvider({ adminKey: 'sk-proj-x', orgId: null }).collect(ctx);
+    const result = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-proj-x', orgId: null }],
+    }).collect(ctx);
     expect(result.status).toBe('error');
     expect(result.diagnostics.at(-1)?.message).toContain('admin key');
   });
@@ -209,7 +221,9 @@ describe('OpenAI provider', () => {
       ...NAME_ROUTES,
       { when: '/organization/costs', body: { data: [], has_more: false } },
     ]);
-    await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect({
+    await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect({
       http,
       range: RANGE,
       timeZone: 'Asia/Tokyo',
@@ -229,17 +243,100 @@ describe('OpenAI provider', () => {
     ];
 
     const plain = context(routes, 'UTC', false);
-    const plainResult = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(
-      plain.ctx,
-    );
+    const plainResult = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(plain.ctx);
     expect(plain.fetch.calls[0]).toContain('bucket_width=1d');
     expect(plainResult.capabilities.hourly).toBe(false);
 
     const asked = context(routes, 'UTC', true);
-    const askedResult = await createOpenAIProvider({ adminKey: 'sk-admin-x', orgId: null }).collect(
-      asked.ctx,
-    );
+    const askedResult = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(asked.ctx);
     expect(asked.fetch.calls[0]).toContain('bucket_width=1h');
     expect(askedResult.capabilities.hourly).toBe(true);
+  });
+
+  describe('with one admin key per organization', () => {
+    const EMPTY_COSTS: StubRoute = {
+      when: '/organization/costs',
+      body: { data: [], has_more: false },
+    };
+    const keys = [
+      { label: 'personal', adminKey: 'sk-admin-home', orgId: null },
+      { label: 'soilytix', adminKey: 'sk-admin-work', orgId: null },
+    ];
+
+    it('reads every organization once and tags each row with its own', async () => {
+      const otherProject = {
+        ...USAGE_BUCKET,
+        results: [{ ...USAGE_BUCKET.results[0], project_id: 'proj_2' }],
+      };
+      const { ctx } = context([
+        {
+          when: '/organization/usage/completions',
+          body: { data: [USAGE_BUCKET], has_more: false },
+          times: 1,
+        },
+        {
+          when: '/organization/usage/completions',
+          body: { data: [otherProject], has_more: false },
+        },
+        { when: '/organization/users', body: { data: [], has_more: false } },
+        { when: '/organization/projects/', body: { data: [], has_more: false } },
+        { when: '/organization/projects', body: { data: [], has_more: false } },
+        EMPTY_COSTS,
+      ]);
+
+      const result = await createOpenAIProvider({ keys }).collect(ctx);
+      expect(result.status).toBe('ok');
+      expect(result.records.map((r) => r.tags.organization)).toEqual(['personal', 'soilytix']);
+    });
+
+    it('reads a second key of the same organization once, not twice', async () => {
+      const { ctx } = context([
+        {
+          when: '/organization/usage/completions',
+          body: { data: [USAGE_BUCKET], has_more: false },
+        },
+        ...NAME_ROUTES,
+        EMPTY_COSTS,
+      ]);
+
+      const result = await createOpenAIProvider({ keys }).collect(ctx);
+      expect(result.records).toHaveLength(1);
+      expect(result.diagnostics.map((d) => d.code)).toContain('key-already-enumerated');
+    });
+
+    it('stays partial, not failed, when one organization rejects its key', async () => {
+      const { ctx } = context([
+        { when: '/organization/usage/completions', status: 401, body: { error: 'no' }, times: 1 },
+        {
+          when: '/organization/usage/completions',
+          body: { data: [USAGE_BUCKET], has_more: false },
+        },
+        ...NAME_ROUTES,
+        EMPTY_COSTS,
+      ]);
+
+      const result = await createOpenAIProvider({ keys }).collect(ctx);
+      expect(result.status).toBe('partial');
+      expect(result.records).toHaveLength(1);
+      const failure = result.diagnostics.find((d) => d.code === 'auth-failed');
+      expect(failure?.message).toContain('"personal"');
+    });
+  });
+
+  it('says so when an organization reports nothing at all, rather than a silent zero', async () => {
+    const { ctx } = context([
+      { when: '/organization/usage/completions', body: { data: [], has_more: false } },
+      ...NAME_ROUTES,
+      { when: '/organization/costs', body: { data: [], has_more: false } },
+    ]);
+
+    const result = await createOpenAIProvider({
+      keys: [{ label: 'default', adminKey: 'sk-admin-x', orgId: null }],
+    }).collect(ctx);
+    expect(result.diagnostics.map((d) => d.code)).toContain('no-usage-reported');
   });
 });

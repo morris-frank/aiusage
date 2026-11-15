@@ -40,7 +40,7 @@ const CONFIG: RuntimeConfig = {
         },
       ],
     },
-    openai: { adminKey: 'sk-admin-key', orgId: null },
+    openai: { keys: [{ label: 'default', adminKey: 'sk-admin-key', orgId: null }] },
     anthropic: { adminKey: 'sk-ant-admin01-key' },
   },
   cacheDir: '/nonexistent',

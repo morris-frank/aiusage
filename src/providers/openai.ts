@@ -18,7 +18,7 @@
  * Requires an **admin** key: project keys get 401 on `/v1/organization/*`.
  */
 
-import type { OpenAICredentials } from '../config.js';
+import type { OpenAICredentials, OpenAIKey } from '../config.js';
 import { fetchWindow, unixSeconds } from '../dates.js';
 import { HttpError } from '../http.js';
 import { usdToMicros } from '../money.js';
@@ -27,6 +27,7 @@ import type {
   Diagnostic,
   Principal,
   ProviderCapabilities,
+  ProviderIdentity,
   ProviderResult,
   UsageRecord,
 } from '../types.js';
@@ -115,60 +116,57 @@ export function createOpenAIProvider(credentials: OpenAICredentials): Provider {
   };
 }
 
+/**
+ * One admin key per organization, each collected on its own. A key that fails
+ * makes the run `partial`, not `error`, while another org still reported.
+ */
 async function collect(
   context: CollectContext,
   credentials: OpenAICredentials,
 ): Promise<ProviderResult> {
   const diagnostics: Diagnostic[] = [];
-  const headers: Record<string, string> = { authorization: `Bearer ${credentials.adminKey}` };
-  if (credentials.orgId) headers['openai-organization'] = credentials.orgId;
+  const records: UsageRecord[] = [];
+  const costRecords: CostRecord[] = [];
+  const seenProjects = new Set<string>();
+  const capabilities: ProviderCapabilities[] = [];
+  const labels: string[] = [];
+  const many = credentials.keys.length > 1;
 
-  // Hourly buckets are the only way to group into a non-UTC day correctly, and
-  // also the only grain that can say *when in the day* usage happened.
-  const bucketWidth = context.hourlyBuckets || context.timeZone !== 'UTC' ? '1h' : '1d';
-  const window = fetchWindow(context.range, context.timeZone);
+  for (const key of credentials.keys) {
+    const org = many ? ` (organization "${key.label}")` : '';
+    try {
+      const result = await collectKey(context, key, diagnostics, org);
+      // Two admin keys of one org see the same projects; reading both would
+      // double every row. Project ids are the evidence.
+      if ([...result.projects].some((id) => seenProjects.has(id))) {
+        diagnostics.push({
+          provider: 'openai',
+          level: 'info',
+          code: 'key-already-enumerated',
+          message: `OpenAI admin key "${key.label}" belongs to an organization already read through another key; its usage is read once, not twice.`,
+        });
+        continue;
+      }
+      for (const id of result.projects) seenProjects.add(id);
+      if (result.records.length === 0 && result.costRecords.length === 0) {
+        diagnostics.push({
+          provider: 'openai',
+          level: 'info',
+          code: 'no-usage-reported',
+          message: `OpenAI${org} reported no completions usage and no billed cost in this window. If you expected some, check which organization the admin key belongs to.`,
+        });
+      }
+      if (many) for (const record of result.records) record.tags.organization = key.label;
+      records.push(...result.records);
+      costRecords.push(...result.costRecords);
+      capabilities.push(result.capabilities);
+      labels.push(key.label);
+    } catch (error) {
+      diagnostics.push(toDiagnostic(error, org));
+    }
+  }
 
-  try {
-    const { buckets, groupBy } = await fetchUsage(
-      context,
-      headers,
-      bucketWidth,
-      window,
-      diagnostics,
-    );
-    const names = await fetchNames(context, headers, diagnostics);
-    const records = toUsageRecords(buckets, names);
-    const costRecords = await fetchCosts(context, headers, window, diagnostics);
-
-    const capabilities: ProviderCapabilities = {
-      ...DECLARED,
-      splitByModel: groupBy.includes('model'),
-      splitByApiKey: groupBy.includes('api_key_id'),
-      splitByAccount: groupBy.includes('user_id'),
-      splitByWorkspace: groupBy.includes('project_id'),
-      reportedCost: costRecords.length > 0,
-      hourly: bucketWidth === '1h',
-    };
-    diagnostics.push({
-      provider: 'openai',
-      level: 'info',
-      code: 'completions-only',
-      message:
-        'Only completions usage is collected; embeddings, images, audio and moderation usage are not, so their billed cost appears as unattributed.',
-    });
-
-    const status = diagnostics.some((d) => d.level === 'warning') ? 'partial' : 'ok';
-    return {
-      provider: 'openai',
-      status,
-      capabilities,
-      records,
-      costRecords,
-      diagnostics,
-      identity: credentials.orgId ? { organizationId: credentials.orgId } : {},
-    };
-  } catch (error) {
-    diagnostics.push(toDiagnostic(error));
+  if (capabilities.length === 0) {
     return {
       provider: 'openai',
       status: 'error',
@@ -179,6 +177,85 @@ async function collect(
       identity: null,
     };
   }
+
+  diagnostics.push({
+    provider: 'openai',
+    level: 'info',
+    code: 'completions-only',
+    message:
+      'Only completions usage is collected; embeddings, images, audio and moderation usage are not, so their billed cost appears as unattributed.',
+  });
+
+  const degraded = diagnostics.some((d) => d.level === 'warning' || d.level === 'error');
+  return {
+    provider: 'openai',
+    status: degraded ? 'partial' : 'ok',
+    capabilities: { ...mergeCapabilities(capabilities), reportedCost: costRecords.length > 0 },
+    records,
+    costRecords,
+    diagnostics,
+    identity: identityOf(credentials, labels),
+  };
+}
+
+/** A split the run claims must hold for every organization it read. */
+function mergeCapabilities(read: readonly ProviderCapabilities[]): ProviderCapabilities {
+  const all = (flag: keyof ProviderCapabilities) => read.every((c) => c[flag] === true);
+  return {
+    ...DECLARED,
+    splitByModel: all('splitByModel'),
+    splitByApiKey: all('splitByApiKey'),
+    splitByAccount: all('splitByAccount'),
+    splitByWorkspace: all('splitByWorkspace'),
+    hourly: all('hourly'),
+  };
+}
+
+function identityOf(credentials: OpenAICredentials, labels: readonly string[]): ProviderIdentity {
+  if (credentials.keys.length > 1) return { organizationName: labels.join(', ') };
+  const orgId = credentials.keys[0]?.orgId;
+  return orgId ? { organizationId: orgId } : {};
+}
+
+async function collectKey(
+  context: CollectContext,
+  key: OpenAIKey,
+  diagnostics: Diagnostic[],
+  org: string,
+): Promise<{
+  records: UsageRecord[];
+  costRecords: CostRecord[];
+  capabilities: ProviderCapabilities;
+  projects: Set<string>;
+}> {
+  const headers: Record<string, string> = { authorization: `Bearer ${key.adminKey}` };
+  if (key.orgId) headers['openai-organization'] = key.orgId;
+
+  // Hourly buckets are the only way to group into a non-UTC day correctly, and
+  // also the only grain that can say *when in the day* usage happened.
+  const bucketWidth = context.hourlyBuckets || context.timeZone !== 'UTC' ? '1h' : '1d';
+  const window = fetchWindow(context.range, context.timeZone);
+
+  const { buckets, groupBy } = await fetchUsage(context, headers, bucketWidth, window, diagnostics);
+  const names = await fetchNames(context, headers, diagnostics);
+  const records = toUsageRecords(buckets, names);
+  const costRecords = await fetchCosts(context, headers, window, diagnostics, org);
+  const projects = new Set(names.projects.keys());
+  for (const record of records) if (record.workspace) projects.add(record.workspace.id);
+
+  return {
+    records,
+    costRecords,
+    projects,
+    capabilities: {
+      ...DECLARED,
+      splitByModel: groupBy.includes('model'),
+      splitByApiKey: groupBy.includes('api_key_id'),
+      splitByAccount: groupBy.includes('user_id'),
+      splitByWorkspace: groupBy.includes('project_id'),
+      hourly: bucketWidth === '1h',
+    },
+  };
 }
 
 async function fetchUsage(
@@ -298,6 +375,7 @@ async function fetchCosts(
   headers: Record<string, string>,
   window: { start: Date; end: Date },
   diagnostics: Diagnostic[],
+  org: string,
 ): Promise<CostRecord[]> {
   const records: CostRecord[] = [];
   let nonUsdSeen = false;
@@ -335,7 +413,7 @@ async function fetchCosts(
       provider: 'openai',
       level: 'warning',
       code: 'costs-unavailable',
-      message: `OpenAI billed cost could not be read (${describe(error)}); costs shown for OpenAI are derived from token prices.`,
+      message: `OpenAI${org} billed cost could not be read (${describe(error)}); costs shown for OpenAI are derived from token prices.`,
     });
     return [];
   }
@@ -455,20 +533,20 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function toDiagnostic(error: unknown): Diagnostic {
+function toDiagnostic(error: unknown, org: string): Diagnostic {
   if (error instanceof HttpError && error.isAuthFailure) {
     return {
       provider: 'openai',
       level: 'error',
       code: 'auth-failed',
-      message: `OpenAI rejected the credentials (HTTP ${error.status}). /v1/organization/* needs an admin key (sk-admin-…), not a project key.`,
+      message: `OpenAI${org} rejected the credentials (HTTP ${error.status}). /v1/organization/* needs an admin key (sk-admin-…), not a project key.`,
     };
   }
   return {
     provider: 'openai',
     level: 'error',
     code: 'collect-failed',
-    message: `OpenAI usage could not be collected: ${describe(error)}`,
+    message: `OpenAI${org} usage could not be collected: ${describe(error)}`,
   };
 }
 

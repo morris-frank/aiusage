@@ -76,6 +76,31 @@ describe('OpenRouter credentials', () => {
   });
 });
 
+/** An OpenAI admin key is scoped to one organization, so two orgs are two keys. */
+describe('OpenAI credentials', () => {
+  it('takes one labelled admin key per organization, and the same key once', () => {
+    const config = loadConfig({
+      OPENAI_ADMIN_KEY_SOILYTIX: 'sk-admin-work',
+      OPENAI_ADMIN_KEY_PERSONAL: 'sk-admin-home',
+      OPENAI_ADMIN_KEY: 'sk-admin-home',
+    });
+    expect(config.credentials.openai?.keys.map((key) => key.label)).toEqual([
+      'default',
+      'soilytix',
+    ]);
+    expect(config.secrets).toEqual(expect.arrayContaining(['sk-admin-work', 'sk-admin-home']));
+  });
+
+  it('sends OPENAI_ORG_ID only with the bare key, since another org would refuse it', () => {
+    const { credentials } = loadConfig({
+      OPENAI_ADMIN_KEY: 'sk-admin-a',
+      OPENAI_ADMIN_KEY_B: 'sk-admin-b',
+      OPENAI_ORG_ID: 'org-a',
+    });
+    expect(credentials.openai?.keys.map((key) => key.orgId)).toEqual(['org-a', null]);
+  });
+});
+
 describe('local source configuration', () => {
   it('discovers ccusage by default', () => {
     expect(loadConfig({}).ccusageCommand).toBeNull();

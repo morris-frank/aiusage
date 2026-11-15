@@ -43,10 +43,20 @@ export type OpenRouterCredentials = {
   keys: OpenRouterKey[];
 };
 
-export type OpenAICredentials = {
+export type OpenAIKey = {
+  /** `OPENAI_ADMIN_KEY_ACME` → `acme`; the bare `OPENAI_ADMIN_KEY` → `default`. */
+  label: string;
   /** Admin key (`sk-admin-…`). Project keys cannot read organization usage. */
   adminKey: string;
   orgId: string | null;
+};
+
+/**
+ * One admin key per organization: an OpenAI admin key is scoped to one org, so
+ * a second org needs `OPENAI_ADMIN_KEY_<LABEL>`.
+ */
+export type OpenAICredentials = {
+  keys: OpenAIKey[];
 };
 
 export type AnthropicCredentials = {
@@ -253,20 +263,43 @@ function parseOpenRouterKeys(env: NodeJS.ProcessEnv): OpenRouterKey[] {
   return keys;
 }
 
+const OPENAI_KEY_VAR = /^OPENAI_ADMIN_KEY(?:_([A-Z0-9_]+))?$/;
+
+function parseOpenAIKeys(env: NodeJS.ProcessEnv): OpenAIKey[] {
+  const keys: OpenAIKey[] = [];
+  const seen = new Set<string>();
+  for (const name of Object.keys(env).sort()) {
+    const match = OPENAI_KEY_VAR.exec(name);
+    const adminKey = match ? trimmed(env[name]) : null;
+    // The same key under two names is one org, not two.
+    if (!match || !adminKey || seen.has(adminKey)) continue;
+    seen.add(adminKey);
+    const suffix = match[1];
+    keys.push({
+      label: suffix ? suffix.toLowerCase() : 'default',
+      adminKey,
+      // OPENAI_ORG_ID picks an org for a multi-org key; it belongs to the bare
+      // variable only, since sending it with another org's key would be refused.
+      orgId: suffix ? null : trimmed(env.OPENAI_ORG_ID),
+    });
+  }
+  return keys;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
   const openrouterKeys = parseOpenRouterKeys(env);
-  const openaiAdminKey = trimmed(env.OPENAI_ADMIN_KEY);
+  const openaiKeys = parseOpenAIKeys(env);
   const anthropicAdminKey = trimmed(env.ANTHROPIC_ADMIN_KEY);
 
   const credentials: Credentials = {
     openrouter: openrouterKeys.length > 0 ? { keys: openrouterKeys } : null,
-    openai: openaiAdminKey ? { adminKey: openaiAdminKey, orgId: trimmed(env.OPENAI_ORG_ID) } : null,
+    openai: openaiKeys.length > 0 ? { keys: openaiKeys } : null,
     anthropic: anthropicAdminKey ? { adminKey: anthropicAdminKey } : null,
   };
 
   const secrets = [
     ...openrouterKeys.map((key) => key.secret),
-    openaiAdminKey,
+    ...openaiKeys.map((key) => key.adminKey),
     anthropicAdminKey,
   ].filter((value): value is string => value !== null);
 
@@ -306,7 +339,7 @@ export function configuredProviders(credentials: Credentials): ProviderId[] {
 /** The env var names a provider reads, for "how do I enable this" messages. */
 export const CREDENTIAL_ENV_VARS: Record<ProviderId, string[]> = {
   openrouter: ['OPENROUTER_API_KEY', 'OPENROUTER_MANAGEMENT_KEY[_LABEL]'],
-  openai: ['OPENAI_ADMIN_KEY'],
+  openai: ['OPENAI_ADMIN_KEY[_LABEL]'],
   anthropic: ['ANTHROPIC_ADMIN_KEY'],
   // Not a credential: the local source is enabled by a flag, not by a key.
   ccusage: [],

@@ -114,7 +114,8 @@ without credentials is **skipped and said so**.
 | `OPENROUTER_MANAGEMENT_KEY` | OpenRouter | Needed to split by key and account. `OPENROUTER_PROVISIONING_KEY` is accepted too. |
 | `OPENROUTER_MANAGEMENT_KEY_<LABEL>` | OpenRouter | Repeatable: one per workspace. |
 | `OPENAI_ADMIN_KEY` | OpenAI | Must be an **admin** key; project keys get 401. |
-| `OPENAI_ORG_ID` | OpenAI | Only for multi-org admin keys. |
+| `OPENAI_ADMIN_KEY_<LABEL>` | OpenAI | Repeatable: one per organization. A second key of an org already read is skipped. |
+| `OPENAI_ORG_ID` | OpenAI | Only for a multi-org admin key in the bare `OPENAI_ADMIN_KEY`. |
 | `ANTHROPIC_ADMIN_KEY` | Claude | Admin API key (`sk-ant-admin…`) or org OAuth token. |
 | `AIUSAGE_CCUSAGE_CMD` | Local | How to run ccusage for `--local`; discovered otherwise. |
 | `AIUSAGE_CCUSAGE_TIMEOUT_MS` | Local | Timeout for that subprocess (default 120000). |
