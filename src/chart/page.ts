@@ -50,6 +50,7 @@ export function renderReportHtml(report: PeriodReport, options: ChartOptions): s
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@300..700&display=swap">
 <style>
+*, *::before, *::after { corner-shape: squircle; }
 ${styles()}
 </style>
 </head>
