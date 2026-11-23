@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateFrame, estimateModel } from '../src/chart/estimate.js';
+import { estimateFrame, estimateModel, estimateScript } from '../src/chart/estimate.js';
 import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
 import { displayModel, vendorOf } from '../src/chart/tokens.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../src/report.js';
@@ -294,6 +294,10 @@ describe('report figure', () => {
     // 25 known days at $1 plus the other 340 days of 2026 at $1.
     expect(html).toContain('data-card-year style="color:#4A4A4A">≈ $365 in 2026, projected<');
     expect(html).not.toContain('July · projected');
+  });
+
+  it('ships a page script that parses', () => {
+    expect(() => new Function(estimateScript())).not.toThrow();
   });
 
   it('weights recent days more in the decayed estimate and recomputes it as of an earlier day', () => {

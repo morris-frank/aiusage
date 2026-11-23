@@ -649,5 +649,5 @@ for (const card of cards) {
   });
 }
 if (cards.length) scrub(cards, lowest, highest, (at) => { for (const paint of painters) paint(at); });
-}`;
+`;
 }
