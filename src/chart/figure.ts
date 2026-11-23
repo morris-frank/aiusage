@@ -725,9 +725,12 @@ function tabsPanel(
   const [first] = stacks.values();
   const top = box.top - 2;
   const height = box.bottom - top + 32;
+  const slot = round(slots(rows.length, box.left, innerRight).width);
   parts.push(
     `<svg x="${box.left}" y="${top}" width="${visible}" height="${height}" viewBox="${innerRight - visible} ${top} ${visible} ${height}"${inner > visible ? ` data-scroll="${box.left}"` : ''}>`,
     `<rect x="${box.left}" y="${top}" width="${inner}" height="${height}" fill="#fff" fill-opacity="0"/>`,
+    // The header cards' as-of day; the page script places and shows it.
+    `<rect data-asof="${rows.map((row) => row.period).join(' ')}" data-left="${box.left}" data-slot="${slot}" x="${box.left}" y="${box.top}" width="${slot}" height="${box.bottom - box.top}" fill="${TOKEN.ink}" fill-opacity="0.08" opacity="0"/>`,
     '<g data-layer="mix">',
     ...mixBars(rows, box, innerRight),
     '</g>',

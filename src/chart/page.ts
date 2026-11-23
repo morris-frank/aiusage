@@ -317,6 +317,11 @@ for (const pane of document.querySelectorAll('svg[data-scroll]')) {
     if (drag) pan(drag.x - (event.clientX - drag.from) / scale());
   });
   for (const type of ['pointerup', 'pointercancel']) pane.addEventListener(type, () => { drag = null; });
+  // The header cards' as-of day: keep its column in view.
+  pane.addEventListener('reveal', (event) => {
+    const [from, to] = event.detail;
+    if (from < x) pan(from - 8); else if (to > x + width) pan(to - width + 8);
+  });
 }
 // The page's figure carries no caption of its own; print opens the provenance instead.
 addEventListener('beforeprint', () => { for (const one of document.querySelectorAll('details.provenance')) one.open = true; });`;

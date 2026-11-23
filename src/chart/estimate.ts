@@ -371,6 +371,7 @@ export function estimateCard(
     const tokens = days.map(() => 0);
     const index = new Map(days.map((day, k) => [day, k]));
     const byVendor = new Map<VendorId, number[]>();
+    const names = new Map<VendorId, string>();
     for (const row of report.daily ?? []) {
       const k = index.get(row.period);
       if (k === undefined) continue;
@@ -379,7 +380,9 @@ export function estimateCard(
       tokens[k] = (tokens[k] ?? 0) + row.inputTokens + row.outputTokens + row.cacheCreationTokens;
       for (const one of row.modelBreakdowns) {
         // By agent, as the figure's series are, so the colours agree with it.
-        const vendor = vendorOf(one.agents[0] ?? one.provider);
+        const agent = one.agents[0] ?? one.provider;
+        const vendor = vendorOf(agent);
+        if (!names.has(vendor)) names.set(vendor, agent);
         const series = byVendor.get(vendor) ?? days.map(() => 0);
         series[k] = (series[k] ?? 0) + one.inputTokens + one.outputTokens + one.cacheCreationTokens;
         byVendor.set(vendor, series);
@@ -426,8 +429,9 @@ export function estimateCard(
     const last = days.length - 1;
     const top = Math.max(...series.slice(first)) * 1.04;
     const path = levelPath(series, first, top, last);
-    // Token share by agent behind the price line, largest at the bottom.
-    let bands: { lower: number[]; upper: number[]; colour: string }[] = [];
+    // Token share by agent, stacked under the price line so the stack's top is
+    // the line (each band is its share of the price's height), largest at the bottom.
+    let bands: { lower: number[]; upper: number[]; colour: string; name: string }[] = [];
     if (kind === 'price') {
       const totals = days.map((_, d) => decay(tokens, d));
       let floor = days.map(() => 0);
@@ -436,10 +440,12 @@ export function estimateCard(
         .map(([vendor, values]) => {
           const lower = floor;
           const upper = days.map(
-            (_, d) => (lower[d] ?? 0) + decay(values, d) / ((totals[d] ?? 0) || 1),
+            (_, d) =>
+              (lower[d] ?? 0) +
+              ((decay(values, d) / ((totals[d] ?? 0) || 1)) * (series[d] ?? 0) * 0.92) / top,
           );
           floor = upper;
-          return { lower, upper, colour: vendorColour(vendor) };
+          return { lower, upper, colour: vendorColour(vendor), name: names.get(vendor) ?? vendor };
         });
     }
     const text = (value: number) =>
@@ -463,7 +469,7 @@ export function estimateCard(
           ? bands
               .map(
                 (band) =>
-                  `<path data-part="band" d="${bandPath(band.lower, band.upper, first, last)}" fill="${band.colour}" fill-opacity="0.3"/>`,
+                  `<path data-part="band" d="${bandPath(band.lower, band.upper, first, last)}" fill="${band.colour}" fill-opacity="0.35"><title>${escapeXml(band.name)}: share of tokens</title></path>`,
               )
               .join('')
           : `<path data-part="area" d="${path.area}" fill="${TOKEN.accentSoft}"/>`
@@ -719,6 +725,27 @@ for (const card of cards) {
     date.textContent = dayOf(at);
   });
 }
-if (cards.length) scrub(cards, lowest, highest, (at) => { for (const paint of painters) paint(at); });
+// The figure's bars mark the as-of day with a soft column, panned into view.
+const marks = [...document.querySelectorAll('rect[data-asof]')].map((rect) => {
+  const periods = rect.dataset.asof.split(' '), slot = Number(rect.dataset.slot), left = Number(rect.dataset.left);
+  const days = cards.length ? JSON.parse(cards[0].dataset.card).days : [];
+  // A day without usage has no bar: it sits between its neighbours.
+  let k = -1;
+  const pos = days.map((day) => { while (k + 1 < periods.length && periods[k + 1] <= day) k += 1; return periods[k] === day ? k : k + 0.5; });
+  return { rect, pane: rect.ownerSVGElement, pos, slot, left };
+});
+const mark = (at) => {
+  for (const m of marks) {
+    const shown = at < highest - 0.01;
+    m.rect.setAttribute('opacity', shown ? '1' : '0');
+    if (!shown) continue;
+    const i = Math.max(0, Math.min(m.pos.length - 1, at)), lo = Math.floor(i), u = i - lo;
+    const p = (m.pos[lo] ?? 0) + ((m.pos[lo + 1] ?? m.pos[lo] ?? 0) - (m.pos[lo] ?? 0)) * u;
+    const x = m.left + m.slot * p;
+    m.rect.setAttribute('x', x);
+    m.pane.dispatchEvent(new CustomEvent('reveal', { detail: [x, x + m.slot] }));
+  }
+};
+if (cards.length) scrub(cards, lowest, highest, (at) => { for (const paint of painters) paint(at); mark(at); });
 `;
 }
