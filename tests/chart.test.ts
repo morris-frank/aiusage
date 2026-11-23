@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { estimateFrame, estimateModel } from '../src/chart/estimate.js';
 import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
 import { displayModel, vendorOf } from '../src/chart/tokens.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../src/report.js';
@@ -120,7 +121,7 @@ function panel(svg: string, id: string): string {
 }
 
 describe('report figure', () => {
-  it('draws one stacked segment per series per period, plus a cumulative line each', () => {
+  it('draws one stacked segment per series per period, and no cumulative panel', () => {
     const svg = renderReportSvg(
       report([
         row('2026-07-24', { openrouter: 1, anthropic: 3 }),
@@ -132,12 +133,7 @@ describe('report figure', () => {
     expect(svg.startsWith('<svg')).toBe(true);
     // 2 periods × 2 series in the stacked cost panel.
     expect(panel(svg, 'cost-daily').match(/<rect/g)?.length).toBe(4);
-    // One line per series; the vendor marks in the end labels are paths too, so
-    // the line width is what distinguishes them.
-    expect(panel(svg, 'cost-cumulative').match(/stroke-width="1.6"/g)?.length).toBe(2);
-    // Direct end labels are the secondary encoding for the cumulative panel.
-    expect(svg).toContain('anthropic  $7.00');
-    expect(svg).toContain('openrouter  $3.00');
+    expect(svg).not.toContain('data-panel="cost-cumulative"');
   });
 
   it('plots tokens alongside cost, and the token mix as shares', () => {
@@ -168,7 +164,6 @@ describe('report figure', () => {
     });
     expect(svg).not.toContain('data-panel="cost-daily"');
     expect(svg).toContain('data-panel="tokens-daily"');
-    expect(svg).toContain('data-panel="tokens-cumulative"');
     expect(svg).toContain('data-panel="token-mix"');
   });
 
@@ -237,7 +232,7 @@ describe('report figure', () => {
     expect(svg).toContain('Cost provenance: reported');
     expect(svg).toContain('OpenRouter (error)');
     expect(svg).toContain('unknown, not zero');
-    expect(svg).toContain('Excluded from panels: $1.50 of billed cost for non-token items');
+    expect(svg).toContain('Excluded from panels: $2 of billed cost for non-token items');
     expect(svg).toContain('litellm@2026-07-26');
   });
 
@@ -287,7 +282,7 @@ describe('report figure', () => {
     expect(svg).toMatch(/fill="#C8FF01" stroke="#[0-9A-F]{6}"/);
   });
 
-  it('projects month and quarter from cost to date plus the run rate, and the year as run rate when the window starts later', () => {
+  it('projects the year from its known days plus the rest at the posterior rate', () => {
     const days = Array.from({ length: 25 }, (_, index) =>
       row(`2026-07-${String(index + 1).padStart(2, '0')}`, { anthropic: 1 }),
     );
@@ -295,12 +290,32 @@ describe('report figure', () => {
       report(days, { range: { since: '2026-07-01', until: '2026-07-25' } }),
       OPTIONS,
     );
-    expect(html).toContain('$1.00/day');
-    expect(html).toContain('July · projected');
-    expect(html).toContain('≈ $31.00');
-    expect(html).toContain('≈ $92.00');
-    expect(html).toContain('2026 · run rate');
-    expect(html).toContain('≈ $365.00');
+    expect(html).toContain('data-card-value>≈ $1<');
+    // 25 known days at $1 plus the other 340 days of 2026 at $1.
+    expect(html).toContain('data-card-year style="color:#4A4A4A">≈ $365 in 2026, projected<');
+    expect(html).not.toContain('July · projected');
+  });
+
+  it('weights recent days more in the decayed estimate and recomputes it as of an earlier day', () => {
+    // Twenty days at $1, then five at $11: the decayed mean leans to the recent
+    // days, the flat mean does not, and as of day 19 both read the $1 regime.
+    const days = Array.from({ length: 25 }, (_, index) =>
+      row(`2026-07-${String(index + 1).padStart(2, '0')}`, { anthropic: index < 20 ? 1 : 11 }),
+    );
+    const model = estimateModel(
+      report(days, { range: { since: '2026-07-01', until: '2026-07-25' } }),
+      OPTIONS,
+    );
+    if (!model) throw new Error('expected a model');
+    expect(model.values).toHaveLength(25);
+    const now = estimateFrame(model, 24);
+    expect(now.flat).toBeCloseTo(3, 6);
+    expect(now.mean).toBeGreaterThan(now.flat);
+    expect(estimateFrame(model, 19).mean).toBeCloseTo(1, 6);
+    // Twenty identical days leave no spread; the regime change does.
+    expect(estimateFrame(model, 19).sd).toBeCloseTo(0, 6);
+    expect(now.sd).toBeGreaterThan(0);
+    expect(now.nEff).toBeLessThan(25);
   });
 
   it('says in the caption when cost was not collected', () => {
@@ -474,8 +489,9 @@ describe('report figure', () => {
     const html = renderReportHtml(data, { ...OPTIONS, billing });
     // 10 days of a $36.50/month plan is $12; OpenRouter's $10 metered; Gemini's
     // $5 has no stated plan, so it stays at API rates and is named.
-    expect(html).toContain('≈ $27.00 actually paid · gemini at API rates');
-    expect(renderReportHtml(data, OPTIONS)).not.toContain('actually paid');
+    expect(html).toContain('≈ $27 actually paid · gemini at API rates');
+    // The page script names the phrase too, so look for it as rendered text.
+    expect(renderReportHtml(data, OPTIONS)).not.toMatch(/>≈ [^<]* actually paid/);
   });
 
   it('shades the top and bottom tenth of each token-class column', () => {

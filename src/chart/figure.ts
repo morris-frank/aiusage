@@ -55,7 +55,6 @@
 
 import type { SplitDimension } from '../aggregate.js';
 import type { BillingPlan } from '../config.js';
-import { formatUsd } from '../money.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../report.js';
 import {
   displayModel,
@@ -68,6 +67,7 @@ import {
   vendorColour,
   vendorMark,
   vendorOf,
+  wholeUsd,
 } from './tokens.js';
 
 export type ChartOptions = {
@@ -365,30 +365,17 @@ function panelSpecs(
     ? [[{ kind: 'tabs', id: 'per-period', views: [...perPeriod, mix, ...shares] }]]
     : [...perPeriod.map((spec) => [spec]), [mix]];
 
-  // The ranking and the accumulation share a row: both answer "where did the
-  // window's total go", one by model and one over time. A ranking needs at
-  // least two models to rank; with zero or one, the cumulative panel takes the
-  // row alone.
-  const cumulative: PanelSpec = {
-    kind: 'cumulative',
-    id: `${measure}-cumulative`,
-    title: `Cumulative ${measure}`,
-    measure,
-  };
-  rows.push(
-    rankedModels.length > 1
-      ? [
-          {
-            kind: 'ranked',
-            id: 'model-rank',
-            title: `Top models by ${measure}`,
-            measure,
-            rows: [...rankedModels],
-          },
-          cumulative,
-        ]
-      : [cumulative],
-  );
+  // A ranking needs at least two models to rank.
+  if (rankedModels.length > 1)
+    rows.push([
+      {
+        kind: 'ranked',
+        id: 'model-rank',
+        title: `Top models by ${measure}`,
+        measure,
+        rows: [...rankedModels],
+      },
+    ]);
   return rows;
 }
 
@@ -710,7 +697,7 @@ function header(
 ): string[] {
   const rows = periodsOf(report);
   const total = options.includeCost
-    ? formatUsd(Math.round(series.reduce((sum, one) => sum + one.costTotal, 0) * 1_000_000))
+    ? wholeUsd(series.reduce((sum, one) => sum + one.costTotal, 0))
     : compactTokens(series.reduce((sum, one) => sum + one.tokenTotal, 0));
   const active = rows.filter((row) =>
     options.includeCost ? (row.totalCost ?? 0) > 0 : row.totalTokens > 0,
@@ -796,10 +783,7 @@ function legend(
     const x = margin + (index % columns) * columnWidth;
     const y = top + Math.floor(index / columns) * 22;
     const label = truncate(entry.label, layout.legendLabel);
-    const amount =
-      measure === 'cost'
-        ? formatUsd(Math.round(entry.costTotal * 1_000_000))
-        : compactTokens(entry.tokenTotal);
+    const amount = measure === 'cost' ? wholeUsd(entry.costTotal) : compactTokens(entry.tokenTotal);
     parts.push(
       // The mark, in the series colour, is the key: no swatch beside it.
       vendorMark(entry.vendor, x, y - 11, 12, inkOf(entry.colour)),
@@ -1052,15 +1036,7 @@ function niceStep(max: number): number {
 type Format = (value: number) => string;
 
 function formatFor(measure: Measure): Format {
-  return measure === 'cost'
-    ? // Whole dollars from $100 up: cents there are noise, and widen every axis label.
-      (value) =>
-        value === 0
-          ? '$0'
-          : value >= 100
-            ? `$${Math.round(value).toLocaleString('en-US')}`
-            : formatUsd(Math.round(value * 1_000_000))
-    : compactTokens;
+  return measure === 'cost' ? wholeUsd : compactTokens;
 }
 
 function grid(box: Box, right: number, max: number, format: Format): string[] {
@@ -1462,7 +1438,7 @@ export function captionLines(
   const unattributed = report.meta.unattributedCost.reduce((sum, entry) => sum + entry.cost, 0);
   if (unattributed > 0) {
     lines.push(
-      `Excluded from panels: $${unattributed.toFixed(2)} of billed cost for non-token items (web search, code execution, session fees).`,
+      `Excluded from panels: ${wholeUsd(unattributed)} of billed cost for non-token items (web search, code execution, session fees).`,
     );
   }
   if (report.meta.priceSources.length > 0) {

@@ -296,3 +296,12 @@ export function escapeXml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+/**
+ * Dollars on the report, whole: no cents anywhere on the page or figure. A
+ * non-zero amount under 50¢ reads "< $1" rather than a "$0" that looks measured.
+ */
+export function wholeUsd(value: number): string {
+  if (value > 0 && value < 0.5) return '< $1';
+  return `$${Math.round(value).toLocaleString('en-US')}`;
+}

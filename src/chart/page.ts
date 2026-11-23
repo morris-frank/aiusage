@@ -18,8 +18,8 @@
 import type { BillingPlan } from '../config.js';
 import type { CostSource } from '../cost.js';
 import { addDays, dayKey, daysBetween } from '../dates.js';
-import { formatUsd } from '../money.js';
 import type { PeriodReport, ProviderSummary, ReportRow } from '../report.js';
+import { ESTIMATE_STYLES, estimateCard, estimateScript } from './estimate.js';
 import {
   type ChartOptions,
   compactTokens,
@@ -37,6 +37,7 @@ import {
   vendorColour,
   vendorMark,
   vendorOf,
+  wholeUsd,
 } from './tokens.js';
 
 export function renderReportHtml(report: PeriodReport, options: ChartOptions): string {
@@ -72,6 +73,7 @@ ${noticeList(report)}
 </main>
 <script>
 ${tabScript()}
+${estimateScript()}
 </script>
 </body>
 </html>
@@ -107,7 +109,8 @@ svg[data-view] { touch-action: pan-y; }
 
 h1 { font-size: 34px; font-weight: 700; line-height: 1.15; color: var(--lime);
      margin: 0 0 6px; letter-spacing: -0.03em; }
-.lede { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
+.lede { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; display: flex; justify-content: space-between; gap: 12px; }
+.lede .generated { color: var(--subtle); font-size: 11.5px; }
 .rule { height: 1px; background: var(--lime); margin: 0 0 28px; }
 h2 { font-size: 17px; font-weight: 400; color: var(--ink); margin: 44px 0 4px; }
 h2 + .note { margin: 0 0 14px; }
@@ -119,6 +122,8 @@ h2 + .note { margin: 0 0 14px; }
 /* A projection is modelled, not measured: dashed, so it never reads as billed. */
 .card.projected { border-style: dashed; border-color: var(--rule); }
 .cards + .cards { margin-top: 12px; }
+/* A row with one wide card keeps the first row's tracks, so it lines up under it. */
+.cards.fill { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .card .label { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase;
                color: var(--muted); }
 .card .value { font-size: 27px; font-weight: 400; color: var(--ink); line-height: 1.25;
@@ -136,6 +141,9 @@ caption { text-align: left; color: var(--muted); font-size: 12.5px; padding: 0 0
 /* Relative, so the absolutely placed screen-reader text stays inside the scroller
    instead of widening the whole page on a phone. */
 .table-scroll { position: relative; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* Cells contain their screen-reader text; otherwise it hangs below the table
+   and the scroller gains a vertical scroll into empty space. */
+.table-scroll td { position: relative; }
 thead th { position: sticky; top: 0; background: #fff; text-align: right; font-weight: 500;
            color: var(--muted); font-size: 10.5px; letter-spacing: 0.06em;
            text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
@@ -184,6 +192,7 @@ tfoot td.left { text-align: left; }
 /* The figure's per-period tabs: one view's layers shown, the rest faded out. */
 svg[data-view] [data-layer] { transition: opacity 0.35s ease; }
 ${viewRules()}
+${ESTIMATE_STYLES}
 [data-show] { cursor: pointer; }
 [data-show]:focus { outline: none; }
 [data-show]:focus-visible rect { stroke: var(--ink); }
@@ -317,8 +326,8 @@ function headerBlock(report: PeriodReport, options: ChartOptions): string {
   const { since, until } = report.meta.range;
   return `<h1>${escapeXml(titleOf(options))}</h1>
 <p class="lede">${escapeXml(
-    `${since} to ${until} · grouped ${report.meta.granularity} in ${report.meta.timezone} · generated ${report.meta.generatedAt}`,
-  )}</p>
+    `${since} to ${until}`,
+  )}<span class="generated">generated ${escapeXml(report.meta.generatedAt)}</span></p>
 <div class="rule"></div>`;
 }
 
@@ -343,9 +352,7 @@ function cards(report: PeriodReport, options: ChartOptions): string {
   }[] = [
     {
       label: 'Total cost',
-      value: options.includeCost
-        ? formatUsd(Math.round((report.totals.totalCost ?? 0) * 1e6))
-        : '—',
+      value: options.includeCost ? wholeUsd(report.totals.totalCost ?? 0) : '—',
       // The provenance travels with the number, never a footnote away from it.
       sub: options.includeCost
         ? `${report.totals.costSource} at API rates`
@@ -387,10 +394,51 @@ function cards(report: PeriodReport, options: ChartOptions): string {
         },
   );
 
+  // Actually paid per day, for the total card's second line; the per-day amounts
+  // sum to `paid` because paidOf is additive over rows and days.
+  const paidDaily: number[] = [];
+  if (paid) {
+    const byDay = new Map(periodsOf(report).map((row) => [row.period, row]));
+    for (let day = since; day <= until; day = addDays(day, 1)) {
+      const row = byDay.get(day);
+      paidDaily.push(paidOf(row ? [row] : [], 1, options.billing)?.usd ?? 0);
+    }
+  }
+  const totalCard = options.includeCost
+    ? estimateCard(
+        report,
+        options,
+        'total',
+        paid
+          ? {
+              line: paidLine(paid, 'actually paid'),
+              daily: paidDaily,
+              rest:
+                paid.atApiRates.length > 0 ? ` · ${paid.atApiRates.join(', ')} at API rates` : '',
+            }
+          : undefined,
+      )
+    : '';
+  // UNRESOLVED (trial): price and leverage are on trial beside the total and the
+  // rate; one of them stays. The small cards keep their own row until then.
+  const rateCard = totalCard ? estimateCard(report, options) : '';
+  const trio = rateCard
+    ? `<div class="cards trio">
+${totalCard}
+${rateCard}
+${estimateCard(report, options, 'price')}
+${paid ? estimateCard(report, options, 'leverage', { line: '', daily: paidDaily, rest: '' }) : ''}
+</div>
+`
+    : '';
+  // The animated row replaces the small cards; they remain only as the fallback.
+  if (trio) return trio;
   return `<div class="cards">
 ${entries
-  .map(
-    (entry) => `  <div class="card">
+  .map((entry, index) =>
+    index === 0 && totalCard
+      ? totalCard
+      : `  <div class="card">
     <div class="label">${escapeXml(entry.label)}</div>
     <div class="value${entry.primary ? ' primary' : ''}">${escapeXml(entry.value)}${entry.graphic ?? ''}</div>
     <div class="sub">${escapeXml(entry.sub)}</div>${
@@ -438,7 +486,7 @@ function paidOf(
 }
 
 function paidLine(paid: Paid, noun: string, suffix = ''): string {
-  const usd = formatUsd(Math.round(paid.usd * 1e6));
+  const usd = wholeUsd(paid.usd);
   const rest = paid.atApiRates.length > 0 ? ` · ${paid.atApiRates.join(', ')} at API rates` : '';
   return `≈ ${usd}${suffix} ${noun}${rest}`;
 }
@@ -459,6 +507,8 @@ const RATE_DAYS = 28;
  */
 function projectionCards(report: PeriodReport, options: ChartOptions): string {
   if (!options.includeCost || !report.daily) return '';
+  // The posterior card already sits in the animated row above.
+  if (estimateCard(report, options)) return '';
   const { since, until } = report.meta.range;
   const today = dayKey(report.meta.generatedAt, report.meta.timezone);
   const lastComplete = today <= until ? addDays(today, -1) : until;
@@ -473,7 +523,7 @@ function projectionCards(report: PeriodReport, options: ChartOptions): string {
   const rateDays = daysBetween(rateStart, lastComplete) + 1;
   if (rateDays < 7) return '';
   const rate = between(rateStart, lastComplete) / rateDays;
-  const usd = (value: number) => formatUsd(Math.round(value * 1e6));
+  const usd = (value: number) => wholeUsd(value);
   // The same projection out of pocket: paid to date plus the paid run rate.
   const daily = report.daily;
   const paidBetween = (from: string, to: string): Paid | null =>
@@ -485,28 +535,8 @@ function projectionCards(report: PeriodReport, options: ChartOptions): string {
   const paidRate = paidBetween(rateStart, lastComplete);
   const perDay = paidRate ? { ...paidRate, usd: paidRate.usd / rateDays } : null;
 
-  const [year, month] = today.split('-').map(Number) as [number, number];
-  const pad = (value: number) => String(value).padStart(2, '0');
-  const quarterMonth = Math.floor((month - 1) / 3) * 3 + 1;
-  const periods = [
-    {
-      label: new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en-US', {
-        month: 'long',
-        timeZone: 'UTC',
-      }),
-      start: `${year}-${pad(month)}-01`,
-      end: addDays(`${month === 12 ? year + 1 : year}-${pad((month % 12) + 1)}-01`, -1),
-    },
-    {
-      label: `Q${(quarterMonth + 2) / 3} ${year}`,
-      start: `${year}-${pad(quarterMonth)}-01`,
-      end: addDays(
-        quarterMonth === 10 ? `${year + 1}-01-01` : `${year}-${pad(quarterMonth + 3)}-01`,
-        -1,
-      ),
-    },
-    { label: String(year), start: `${year}-01-01`, end: `${year}-12-31` },
-  ];
+  const year = Number(today.slice(0, 4));
+  const periods = [{ label: String(year), start: `${year}-01-01`, end: `${year}-12-31` }];
 
   const entries = periods.map(({ label, start, end }) => {
     const left = daysBetween(lastComplete, end);
@@ -533,21 +563,32 @@ function projectionCards(report: PeriodReport, options: ChartOptions): string {
       ? `\n    <div class="sub paid">${escapeXml(paidLine(paid, 'actually paid', suffix))}</div>`
       : '';
 
-  return `<div class="cards">
-  <div class="card projected">
+  // UNRESOLVED (trial): the rate card shows the scrubbable posterior with the
+  // year under it (no paid line); the flat 28-day cards are only the fallback.
+  const rateCard =
+    estimateCard(report, options) ||
+    `  <div class="card projected">
     <div class="label">Run rate</div>
     <div class="value">${escapeXml(usd(rate))}/day</div>
     <div class="sub">${escapeXml(`mean of ${rateStart} to ${lastComplete}; an estimate, not billed`)}</div>${paidSub(perDay, '/day')}
-  </div>
-${entries
-  .map(
-    (entry) => `  <div class="card projected">
+  </div>`;
+  // The posterior card carries the year as its second readout; the flat year
+  // card is only the fallback beside the flat run-rate card.
+  return `<div class="cards fill">
+${rateCard}
+${
+  rateCard.includes('data-card=')
+    ? ''
+    : entries
+        .map(
+          (entry) => `  <div class="card projected">
     <div class="label">${escapeXml(entry.label)}</div>
     <div class="value">≈ ${escapeXml(entry.value)}</div>
     <div class="sub">${escapeXml(entry.sub)}</div>${paidSub(entry.paid)}
   </div>`,
-  )
-  .join('\n')}
+        )
+        .join('\n')
+}
 </div>`;
 }
 
@@ -607,7 +648,7 @@ function periodTable(
     '<td class="col-models"></td>',
     `<td>${escapeXml(compactTokens(report.totals.totalTokens))}</td>`,
     ...(options.includeCost
-      ? [`<td>${escapeXml(formatUsd(Math.round((report.totals.totalCost ?? 0) * 1e6)))}</td>`]
+      ? [`<td>${escapeXml(wholeUsd(report.totals.totalCost ?? 0))}</td>`]
       : []),
     number(report.totals.inputTokens, 'col-input'),
     number(report.totals.outputTokens, 'col-output'),
@@ -696,7 +737,7 @@ function sourceTable(report: PeriodReport, options: ChartOptions): string {
     <td class="left"${tooltip}>${marks([provider.id])} ${escapeXml(provider.label)}${providerNotices.length > 0 ? ' *' : ''}</td>
     <td class="left">${badge(provider.status)}</td>
     <td>${provider.recordCount.toLocaleString('en-US')}</td>
-    ${options.includeCost ? `<td>${escapeXml(formatUsd(Math.round((provider.totalCost ?? 0) * 1e6)))}</td>` : ''}
+    ${options.includeCost ? `<td>${escapeXml(wholeUsd(provider.totalCost ?? 0))}</td>` : ''}
     <td class="left">${answered(provider)}</td>
   </tr>`;
     })
@@ -752,7 +793,7 @@ ${lines.map((line) => `<p class="note">${escapeXml(line)}</p>`).join('\n')}
 function costCell(cost: number, max: number): string {
   const share = max > 0 ? Math.max(cost / max, 0) : 0;
   const width = (share * 100).toFixed(1);
-  return `<td><span class="amount">${escapeXml(formatUsd(Math.round(cost * 1e6)))}</span><span class="bar${
+  return `<td><span class="amount">${escapeXml(wholeUsd(cost))}</span><span class="bar${
     cost > 0 ? '' : ' dim'
   }" style="width:${width}%"></span></td>`;
 }
