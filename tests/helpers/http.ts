@@ -6,6 +6,7 @@ export type StubRoute = {
   /** Additional substrings that must all be present — for query matching. */
   and?: string[];
   status?: number;
+  headers?: Record<string, string>;
   body: unknown;
   /** Number of times this route may serve before the next matching one is used. */
   times?: number;
@@ -41,7 +42,7 @@ export function stubFetch(routes: StubRoute[]): StubFetch {
     route.left -= 1;
     return new Response(JSON.stringify(route.body), {
       status: route.status ?? 200,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...route.headers },
     });
   }) as StubFetch;
 

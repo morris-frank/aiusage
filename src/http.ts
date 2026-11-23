@@ -57,6 +57,8 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 500;
+/** A longer Retry-After (an exhausted hourly quota) fails now rather than stalling the run. */
+const MAX_RETRY_AFTER_MS = 60_000;
 
 /** Key shapes that must never reach a terminal, even if a caller forgets. */
 const SECRET_PATTERNS = [
@@ -151,14 +153,20 @@ export class HttpClient {
 
         const bodyText = await response.text().catch(() => '');
         const error = new HttpError(response.status, this.safe(target), this.safe(bodyText));
-        if (!RETRYABLE_STATUSES.has(response.status) || attempt === this.maxRetries) throw error;
+        const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
+        if (
+          !RETRYABLE_STATUSES.has(response.status) ||
+          attempt === this.maxRetries ||
+          (retryAfter !== null && retryAfter > MAX_RETRY_AFTER_MS)
+        )
+          throw error;
 
         lastError = error;
-        const retryAfter = parseRetryAfter(response.headers.get('retry-after'));
         // Honour the server's own pacing instead of our backoff when given.
         if (retryAfter !== null) await this.sleep(retryAfter);
       } catch (error) {
-        if (error instanceof HttpError && !RETRYABLE_STATUSES.has(error.status)) throw error;
+        // An HttpError here was thrown above as final; only network errors retry.
+        if (error instanceof HttpError) throw error;
         if (attempt === this.maxRetries) throw this.wrap(error, target);
         lastError = error;
       }

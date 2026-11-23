@@ -48,6 +48,18 @@ describe('HttpClient', () => {
     expect(fetchImpl.calls).toHaveLength(3);
   });
 
+  it('fails at once on a Retry-After too long to wait for, rather than stalling', async () => {
+    const fetchImpl = stubFetch([
+      { when: '/usage', status: 429, headers: { 'retry-after': '3600' }, body: {} },
+    ]);
+    const sleeps: number[] = [];
+    const client = new HttpClient({ fetchImpl, sleep: async (ms) => void sleeps.push(ms) });
+
+    await expect(client.json('https://example.test/usage')).rejects.toBeInstanceOf(HttpError);
+    expect(fetchImpl.calls).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
   it('does not retry a 401 — the credential will not improve', async () => {
     const fetchImpl = stubFetch([{ when: '/usage', status: 401, body: { error: 'nope' } }]);
     const client = new HttpClient({ fetchImpl, sleep: async () => {} });
