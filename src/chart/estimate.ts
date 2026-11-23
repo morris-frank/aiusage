@@ -22,7 +22,7 @@
 import { addDays, dayKey, daysBetween } from '../dates.js';
 import type { PeriodReport } from '../report.js';
 import type { ChartOptions } from './figure.js';
-import { escapeXml, TOKEN } from './tokens.js';
+import { escapeXml, TOKEN, type VendorId, vendorColour, vendorOf } from './tokens.js';
 
 const WINDOW_DAYS = 30;
 const HALF_LIFE_DAYS = 7;
@@ -262,6 +262,30 @@ export function levelPath(
   return { line, area: `${line}L${end.toFixed(2)},100L${x(first).toFixed(2)},100Z`, value };
 }
 
+/** A band between two share series (0…1) from `first` up to `at`, in the card box. */
+export function bandPath(lower: number[], upper: number[], first: number, at: number): string {
+  const n = upper.length;
+  if (at < first) return '';
+  const x = (k: number) => ((k + 1) / n) * 1000;
+  const whole = Math.floor(at);
+  const u = at - whole;
+  const ks: number[] = [];
+  for (let k = first; k <= whole && k < n; k += 1) ks.push(k);
+  const point = (series: number[], k: number) =>
+    `${x(k).toFixed(2)},${(100 - (series[k] ?? 0) * 100).toFixed(2)}`;
+  const tip = (series: number[]) => {
+    const value = (series[whole] ?? 0) + ((series[whole + 1] ?? 0) - (series[whole] ?? 0)) * u;
+    return `${(x(whole) + (x(whole + 1) - x(whole)) * u).toFixed(2)},${(100 - value * 100).toFixed(2)}`;
+  };
+  const top = ks.map((k) => point(upper, k));
+  const bottom = ks.map((k) => point(lower, k)).reverse();
+  if (u > 0) {
+    top.push(tip(upper));
+    bottom.unshift(tip(lower));
+  }
+  return `M${[...top, ...bottom].join('L')}Z`;
+}
+
 /**
  * A header card that scrubs through time: the daily rate posterior, the year's
  * projection from it, or the cumulative total. Focus it and the wheel moves the
@@ -346,13 +370,27 @@ export function estimateCard(
     const cost = days.map(() => 0);
     const tokens = days.map(() => 0);
     const index = new Map(days.map((day, k) => [day, k]));
+    const byVendor = new Map<VendorId, number[]>();
     for (const row of report.daily ?? []) {
       const k = index.get(row.period);
       if (k === undefined) continue;
       cost[k] = (cost[k] ?? 0) + (row.totalCost ?? 0);
       // Cache reads are excluded: they are near-free and would swamp the price.
       tokens[k] = (tokens[k] ?? 0) + row.inputTokens + row.outputTokens + row.cacheCreationTokens;
+      for (const one of row.modelBreakdowns) {
+        // By agent, as the figure's series are, so the colours agree with it.
+        const vendor = vendorOf(one.agents[0] ?? one.provider);
+        const series = byVendor.get(vendor) ?? days.map(() => 0);
+        series[k] = (series[k] ?? 0) + one.inputTokens + one.outputTokens + one.cacheCreationTokens;
+        byVendor.set(vendor, series);
+      }
     }
+    const decay = (values: number[], d: number) => {
+      let sum = 0;
+      for (let k = Math.max(0, d - model.window + 1); k <= d; k += 1)
+        sum += 0.5 ** ((d - k) / model.halfLife) * (values[k] ?? 0);
+      return sum;
+    };
     let series: number[];
     let first: number;
     let label: string;
@@ -360,21 +398,15 @@ export function estimateCard(
     if (kind === 'price') {
       // Decayed like the rate: cost-weighted over token-weighted, per million.
       series = days.map((_, d) => {
-        let c = 0;
-        let t = 0;
-        for (let k = Math.max(0, d - model.window + 1); k <= d; k += 1) {
-          const w = 0.5 ** ((d - k) / model.halfLife);
-          c += w * (cost[k] ?? 0);
-          t += w * (tokens[k] ?? 0);
-        }
-        return t > 0 ? (c / t) * 1e6 : 0;
+        const t = decay(tokens, d);
+        return t > 0 ? (decay(cost, d) / t) * 1e6 : 0;
       });
       first = Math.max(
         0,
         tokens.findIndex((t) => t > 0),
       );
       label = 'Price per M tokens';
-      title = `API-rate cost per million tokens (input, output and cache writes; cache reads excluded, their cost included), decayed with a ${model.halfLife}-day half-life over ${model.window} days. Derived, not billed.`;
+      title = `API-rate cost per million tokens (input, output and cache writes; cache reads excluded, their cost included), decayed with a ${model.halfLife}-day half-life over ${model.window} days. Shaded: each agent's share of those tokens, decayed the same way; when the price moves with the shading, the mix changed, not the prices. Derived, not billed.`;
     } else {
       // Plan leverage: what the usage would have cost at API rates over what was paid.
       let api = 0;
@@ -394,6 +426,22 @@ export function estimateCard(
     const last = days.length - 1;
     const top = Math.max(...series.slice(first)) * 1.04;
     const path = levelPath(series, first, top, last);
+    // Token share by agent behind the price line, largest at the bottom.
+    let bands: { lower: number[]; upper: number[]; colour: string }[] = [];
+    if (kind === 'price') {
+      const totals = days.map((_, d) => decay(tokens, d));
+      let floor = days.map(() => 0);
+      bands = [...byVendor.entries()]
+        .sort(([, a], [, b]) => b.reduce((x, y) => x + y, 0) - a.reduce((x, y) => x + y, 0))
+        .map(([vendor, values]) => {
+          const lower = floor;
+          const upper = days.map(
+            (_, d) => (lower[d] ?? 0) + decay(values, d) / ((totals[d] ?? 0) || 1),
+          );
+          floor = upper;
+          return { lower, upper, colour: vendorColour(vendor) };
+        });
+    }
     const text = (value: number) =>
       kind === 'price' ? `${compactValue(model, value)} / M` : `${value.toFixed(1)}×`;
     return host(
@@ -401,8 +449,25 @@ export function estimateCard(
       title,
       text(path.value),
       short(days[last] ?? ''),
-      { kind, days, series, top, first, last },
-      `<path data-part="area" d="${path.area}" fill="${TOKEN.accentSoft}"/><path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="1.25" vector-effect="non-scaling-stroke"/>`,
+      {
+        kind,
+        days,
+        series,
+        top,
+        first,
+        last,
+        bands: bands.map(({ lower, upper }) => ({ lower, upper })),
+      },
+      `${
+        bands.length
+          ? bands
+              .map(
+                (band) =>
+                  `<path data-part="band" d="${bandPath(band.lower, band.upper, first, last)}" fill="${band.colour}" fill-opacity="0.3"/>`,
+              )
+              .join('')
+          : `<path data-part="area" d="${path.area}" fill="${TOKEN.accentSoft}"/>`
+      }<path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="1.25" vector-effect="non-scaling-stroke"/>`,
     );
   }
 
@@ -549,12 +614,13 @@ export function estimateScript(): string {
   return `const interp = ${interp.toString()};
 const cumulativePath = ${cumulativePath.toString()};
 const levelPath = ${levelPath.toString()};
+const bandPath = ${bandPath.toString()};
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const shortDay = (day) => new Date(day + 'T00:00:00Z').toLocaleString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const amount = (unit, n) => unit === 'usd' ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
   : Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 function scrub(hosts, first, last, paint) {
-  let at = last, target = last, velocity = 0, frame = 0, then = 0;
+  let at = last, target = last, velocity = 0, frame = 0, then = 0, held = -Infinity;
   const omega = 16;
   const tick = (now) => {
     const dt = Math.min(0.05, then ? (now - then) / 1000 : 1 / 60);
@@ -578,7 +644,11 @@ function scrub(hosts, first, last, paint) {
     const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
     // Down or left is back in time, at 40 px a day.
     const next = Math.min(last, Math.max(first, target + (event.deltaX - event.deltaY) * scale / 40));
-    if (next === target) return;
+    // At an end the same gesture (and its trackpad momentum) stays captured;
+    // only a fresh wheel after a pause goes back to the page.
+    const now = event.timeStamp;
+    if (next === target && now - held > 300) return;
+    held = now;
     event.preventDefault();
     go(next);
   }, { passive: false });
@@ -593,15 +663,15 @@ function scrub(hosts, first, last, paint) {
   for (const type of ['pointerup', 'pointercancel']) host.addEventListener(type, () => { drag = null; });
   }
 }
-// The header cards share one as-of day: scrolling any of them moves all three.
-// Each clamps to its own range (the rate needs a week of days; the total runs
-// from before the first day through today).
+// The header cards share one as-of day: scrolling any of them moves them all.
+// They start together at the latest first day (the rate needs a week of days)
+// and each clamps to its own last day (the total runs through today).
 const cards = [...document.querySelectorAll('[data-card]')];
 const painters = [];
-let lowest = Infinity, highest = -Infinity;
+let lowest = -Infinity, highest = -Infinity;
 for (const card of cards) {
   const data = JSON.parse(card.dataset.card);
-  lowest = Math.min(lowest, data.first); highest = Math.max(highest, data.last);
+  lowest = Math.max(lowest, data.first); highest = Math.max(highest, data.last);
   const clamp = (at) => Math.min(data.last, Math.max(data.first, at));
   const value = card.querySelector('[data-card-value]'), date = card.querySelector('[data-card-date]');
   const svg = card.querySelector('svg');
@@ -625,11 +695,12 @@ for (const card of cards) {
     continue;
   }
   if (data.kind === 'price' || data.kind === 'leverage') {
-    const line = part('line'), area = part('area');
+    const line = part('line'), area = part('area'), bands = [...svg.querySelectorAll('[data-part="band"]')];
     painters.push((time) => {
       const at = clamp(time);
       const path = levelPath(data.series, data.first, data.top, at);
-      line.setAttribute('d', path.line); area.setAttribute('d', path.area);
+      line.setAttribute('d', path.line); area?.setAttribute('d', path.area);
+      bands.forEach((band, i) => band.setAttribute('d', bandPath(data.bands[i].lower, data.bands[i].upper, data.first, at)));
       value.textContent = data.kind === 'price' ? amount('usd', path.value) + ' / M' : path.value.toFixed(1) + '×';
       date.textContent = dayOf(at);
     });

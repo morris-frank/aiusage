@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { renderReportSvg } from '../src/chart/index.js';
 import {
   aggregateByDimension,
   aggregateByPeriod,
@@ -372,7 +371,7 @@ const MIXED_AGENT_RUNNER: CommandRunner = async () => {
 };
 
 describe('the top models panel over mixed-agent local rows', () => {
-  it('credits each agent with its own share of a shared model, and guesses none', async () => {
+  it('credits each agent with its own share of a shared model', async () => {
     const { collection, costing } = await pipeline({ runner: MIXED_AGENT_RUNNER });
     const splits = ['model', 'agent'] as const;
     const periods = aggregateByPeriod(costing.records, {
@@ -400,30 +399,6 @@ describe('the top models panel over mixed-agent local rows', () => {
         ['antigravity', 1.5],
       ]),
     );
-
-    const svg = renderReportSvg(report, { series: 'agent', includeCost: true });
-    const rank = /<g data-panel="model-rank">([\s\S]*?)<\/g>\s*<g data-panel/.exec(svg)?.[1] ?? svg;
-    // Claude Code's Opus is Claude's, Codex's GPT is Codex's — no merged row.
-    expect(rank).toContain('>Opus 4.6 · claude<');
-    expect(rank).toContain('>Opus 4.6 · antigravity<');
-    expect(rank).toContain('>GPT 5.3 · codex<');
-    expect(rank).not.toContain('†');
-    // The day without per-agent rows stays visibly unattributed.
-    expect(rank).toContain('>Opus 4.6 · agent unknown<');
-    // The ranking wears the top graph's colour for the agent.
-    const legend = (agent: string) =>
-      new RegExp(
-        `fill="(#[0-9A-F]{6})" fill-rule="evenodd">(?:<path [^>]*/>)+</g>\\s*<text [^>]*>${agent}<`,
-      ).exec(svg)?.[1];
-    const dot = (agent: string) =>
-      new RegExp(`Opus 4\\.6 · ${agent}</text></g>\\s*<circle [^>]*fill="(#[0-9A-F]{6})"`).exec(
-        rank,
-      )?.[1];
-    expect(dot('claude')).toBe(legend('claude'));
-    expect(dot('anthropic')).toBe(legend('anthropic'));
-    // Claude Code leads, so it takes the Anthropic red; the API a second colour.
-    expect(legend('claude')).toBe('#D97757');
-    expect(legend('anthropic')).not.toBe('#D97757');
   });
 });
 

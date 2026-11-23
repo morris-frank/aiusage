@@ -645,24 +645,6 @@ describe('report figure', () => {
     expect(svg).toContain('Cost provenance and incomplete-source status');
   });
 
-  it('ranks models by cost, coloured by provider rather than by model', () => {
-    const svg = renderReportSvg(
-      report([
-        row('2026-07-25', { openrouter: 3, openai: 1 }, [
-          modelBreakdown('minimax/minimax-m3', 'openrouter', 2),
-          modelBreakdown('gpt-4o-mini-2024-07-18', 'openai', 1),
-        ]),
-      ]),
-      OPTIONS,
-    );
-
-    // The vendor marks' own nested <g> groups make the naive `panel()` helper
-    // stop early, so assert against the full document instead.
-    expect(svg).toContain('data-panel="model-rank"');
-    expect(svg).toContain('minimax/minimax-m3');
-    expect(svg).toContain('gpt-4o-mini-2024-07-18');
-  });
-
   it('never overprints two dates at the right edge of the axis', () => {
     // 30 periods → a stride of 4, so the stride's last label lands on index 28.
     // Labelling index 29 as well would smear two dates on top of each other.
@@ -705,36 +687,6 @@ describe('report figure', () => {
       OPTIONS,
     );
     expect(svg).not.toContain('data-panel="model-rank"');
-  });
-
-  it('folds the tail beyond the top models into a disclosed "Other" row, never a silent cut', () => {
-    const models = Array.from({ length: 10 }, (_unused, index) =>
-      modelBreakdown(`model-${index}`, 'openrouter', 10 - index),
-    );
-    const svg = renderReportSvg(report([row('2026-07-25', { openrouter: 55 }, models)]), OPTIONS);
-
-    expect(svg).toContain('Other 2 models');
-    expect(svg).toContain('groups the 2 lowest-total models as &quot;Other 2 models&quot;');
-  });
-
-  it('marks a merged model with no per-agent split with the neutral ring, not either colour', () => {
-    const svg = renderReportSvg(
-      report([
-        row('2026-07-25', { openrouter: 2, anthropic: 1 }, [
-          modelBreakdown('anthropic/claude-haiku-4.5', 'anthropic,openrouter', 3, 1000, [
-            'anthropic',
-            'openrouter',
-          ]),
-          modelBreakdown('gpt-4o-mini-2024-07-18', 'openai', 1),
-        ]),
-      ]),
-      OPTIONS,
-    );
-
-    // Short name on the row, the full id on hover.
-    expect(svg).toContain('>Haiku 4.5 †<');
-    expect(svg).toContain('<title>anthropic/claude-haiku-4.5</title>');
-    expect(svg).toContain('Haiku 4.5 was run under multiple agents');
   });
 });
 

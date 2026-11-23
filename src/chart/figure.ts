@@ -55,7 +55,7 @@
 
 import type { SplitDimension } from '../aggregate.js';
 import type { BillingPlan } from '../config.js';
-import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../report.js';
+import type { DimensionBreakdown, PeriodReport, ReportRow } from '../report.js';
 import {
   displayModel,
   escapeXml,
@@ -160,7 +160,6 @@ const MIN_SLOT = 13;
 const PANEL_HEIGHT = 150;
 const PANEL_GAP = 74;
 const RANK_ROW_HEIGHT = 22;
-const RANK_CAPACITY = 8;
 /** Models drawn in the model-share view before the tail folds into "Other". */
 const SHARE_MODELS = 7;
 
@@ -238,14 +237,8 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const right = width - layout.rightMargin;
   const series = buildSeries(rows, breakdownsOf(options.series), options.includeCost);
   const modelSeries = options.interactive ? buildModelSeries(rows) : [];
-  const measure: Measure = options.includeCost ? 'cost' : 'tokens';
-  // The ranking reuses the top graph's colour for an agent, so the two agree.
-  const agentColours = new Map(
-    options.series === 'agent' ? series.map((one) => [one.key, one.colour] as const) : [],
-  );
-  const rankedModels = buildModelRanking(rows, measure, agentColours);
   // On a phone a paired row would leave each panel a thumbnail; stack them.
-  const panelRows = panelSpecs(report, options, rankedModels).flatMap((row) =>
+  const panelRows = panelSpecs(report, options).flatMap((row) =>
     layout.narrow ? row.map((spec) => [spec]) : [row],
   );
 
@@ -282,7 +275,7 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   // so its figure ends under the last axis instead of a hidden caption's height.
   const captionText = options.interactive
     ? []
-    : wrapAll(captionLines(report, options, series, rankedModels), width - margin * 2);
+    : wrapAll(captionLines(report, options, series), width - margin * 2);
   const height = options.interactive ? captionTop - 18 : captionTop + captionText.length * 15 + 16;
 
   const parts: string[] = [
@@ -299,7 +292,7 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="${TOKEN.font}"${width > requested ? ' data-expanded' : ''}${options.interactive ? ` data-view="${options.includeCost ? 'cost' : 'tokens'}"` : ''} role="img" aria-labelledby="aiusage-chart-title${id} aiusage-chart-desc${id}">`,
     `<title id="aiusage-chart-title${id}">${escapeXml(titleOf(options))}</title>`,
     `<desc id="aiusage-chart-desc${id}">${escapeXml(
-      chartDescription(report, options, series, rankedModels),
+      chartDescription(report, options, series),
     )}</desc>`,
     parts.join('\n'),
     '</svg>',
@@ -310,14 +303,12 @@ function chartDescription(
   report: PeriodReport,
   options: ChartOptions,
   series: readonly Series[],
-  rankedModels: readonly RankedRow[],
 ): string {
   const { since, until } = report.meta.range;
   const measure = options.includeCost ? 'cost and token usage' : 'token usage';
   const reporting = report.meta.providers.filter((provider) => provider.status === 'ok').length;
   const incomplete = report.meta.providers.length - reporting;
-  const ranking = rankedModels.length > 1 ? ', a model ranking,' : '';
-  return `${titleOf(options)} from ${since} to ${until}, showing ${measure} over time${ranking} and token mix across ${series.length} ${SERIES_NOUN[options.series]} series. ${reporting} sources fully reported; ${incomplete} were partial, skipped, unsupported, or failed. Cost provenance and incomplete-source status are in the figure caption.`;
+  return `${titleOf(options)} from ${since} to ${until}, showing ${measure} over time and token mix across ${series.length} ${SERIES_NOUN[options.series]} series. ${reporting} sources fully reported; ${incomplete} were partial, skipped, unsupported, or failed. Cost provenance and incomplete-source status are in the figure caption.`;
 }
 
 export function periodsOf(report: PeriodReport): ReportRow[] {
@@ -329,11 +320,7 @@ function panelHeightOf(spec: PanelSpec): number {
   return PANEL_HEIGHT;
 }
 
-function panelSpecs(
-  report: PeriodReport,
-  options: ChartOptions,
-  rankedModels: readonly RankedRow[],
-): PanelRow[] {
+function panelSpecs(report: PeriodReport, options: ChartOptions): PanelRow[] {
   const cadence = cadenceOf(report);
   const measure: Measure = options.includeCost ? 'cost' : 'tokens';
   const tokens = {
@@ -365,17 +352,6 @@ function panelSpecs(
     ? [[{ kind: 'tabs', id: 'per-period', views: [...perPeriod, mix, ...shares] }]]
     : [...perPeriod.map((spec) => [spec]), [mix]];
 
-  // A ranking needs at least two models to rank.
-  if (rankedModels.length > 1)
-    rows.push([
-      {
-        kind: 'ranked',
-        id: 'model-rank',
-        title: `Top models by ${measure}`,
-        measure,
-        rows: [...rankedModels],
-      },
-    ]);
   return rows;
 }
 
@@ -559,118 +535,6 @@ function buildSeries(
         return entry;
       })
   );
-}
-
-/** An agent's colour in the ranking: the top graph's when it has one. */
-function agentColour(
-  agent: string | null,
-  vendor: VendorId,
-  agentColours: ReadonlyMap<string, string>,
-): string {
-  const fromSeries = agent === null ? undefined : agentColours.get(agent);
-  return fromSeries ?? (vendor === 'other' ? TOKEN.subtle : vendorColour(vendor));
-}
-
-/**
- * Every model, ranked by total cost or tokens across the whole window,
- * regardless of `options.series` — `modelBreakdowns` is unconditional on every
- * row, so this reads directly off it rather than requiring `--split model`.
- *
- * One row per model *and agent*: a model Claude Code, the Anthropic API and
- * OpenRouter all ran is three rows, each credited to the agent whose usage it
- * is (`agentBreakdowns`), not one merged row no agent can honestly wear.
- * Colour comes from the agent (`vendorOf` applied to the agent name, not the
- * model name), and takes the top graph's own colour for that agent when the
- * series are agents, so one agent reads as one colour across the figure. Local
- * rows ccusage could not attribute (agent `ccusage`, the tool, not an agent)
- * stay a visibly unattributed row with the neutral mark — never guessed. Only
- * a breakdown without `agentBreakdowns` falls back to one merged row, marked
- * mixed when it had several agents; `captionLines` discloses those.
- */
-function buildModelRanking(
-  rows: readonly ReportRow[],
-  measure: Measure,
-  agentColours: ReadonlyMap<string, string>,
-): RankedRow[] {
-  const found = new Map<string, { model: string; value: number; agents: Set<string> }>();
-  const add = (model: string, agent: string | null, value: number, agents: readonly string[]) => {
-    const key = `${model}\u0000${agent ?? ''}`;
-    const entry = found.get(key) ?? { model, value: 0, agents: new Set<string>() };
-    entry.value += value;
-    for (const one of agents) entry.agents.add(one);
-    found.set(key, entry);
-  };
-
-  for (const row of rows) {
-    for (const model of row.modelBreakdowns) {
-      if (model.agentBreakdowns) {
-        for (const agent of model.agentBreakdowns) {
-          add(model.modelName, agent.id, measureOf(agent, measure), [agent.id]);
-        }
-      } else {
-        const only = model.agents.length === 1 ? (model.agents[0] ?? null) : null;
-        add(model.modelName, only, valueOfModel(model, measure), model.agents);
-      }
-    }
-  }
-
-  // A model shown under several agents names the agent on each of its rows.
-  const rowsPerModel = new Map<string, number>();
-  for (const entry of found.values()) {
-    rowsPerModel.set(entry.model, (rowsPerModel.get(entry.model) ?? 0) + 1);
-  }
-
-  const ranked: RankedRow[] = [...found.values()]
-    .map((entry): RankedRow => {
-      const agents = [...entry.agents].sort();
-      const mixedAgent = agents.length > 1;
-      const agent = mixedAgent ? null : (agents[0] ?? null);
-      const unattributed = !mixedAgent && (agent === null || agent === 'ccusage');
-      const vendor: VendorId = agent === null || unattributed ? 'other' : vendorOf(agent);
-      const named = (rowsPerModel.get(entry.model) ?? 0) > 1 && agent !== null;
-      return {
-        label: entry.model,
-        ...(unattributed
-          ? { agentLabel: 'agent unknown', unattributed: true }
-          : named
-            ? { agentLabel: agent }
-            : {}),
-        vendor,
-        colour: unattributed ? TOKEN.subtle : agentColour(agent, vendor, agentColours),
-        value: entry.value,
-        agents,
-        mixedAgent,
-        isOther: false,
-      };
-    })
-    .sort(
-      (a, b) =>
-        b.value - a.value ||
-        a.label.localeCompare(b.label) ||
-        (a.agentLabel ?? '').localeCompare(b.agentLabel ?? ''),
-    );
-
-  if (ranked.length <= RANK_CAPACITY) return ranked;
-
-  const kept = ranked.slice(0, RANK_CAPACITY);
-  const tail = ranked.slice(RANK_CAPACITY);
-  kept.push({
-    label: `Other ${tail.length} models`,
-    vendor: 'other',
-    colour: TOKEN.subtle,
-    value: tail.reduce((sum, one) => sum + one.value, 0),
-    agents: [...new Set(tail.flatMap((one) => one.agents))].sort(),
-    mixedAgent: false,
-    isOther: true,
-    tailCount: tail.length,
-  });
-  return kept;
-}
-
-function valueOfModel(model: ModelBreakdown, measure: Measure): number {
-  return measure === 'cost'
-    ? (model.cost ?? 0)
-    : model.inputTokens + model.outputTokens + model.cacheCreationTokens + model.cacheReadTokens;
 }
 
 /**
@@ -1490,15 +1354,7 @@ export function captionLines(
 export function figureCaption(report: PeriodReport, options: ChartOptions): string[] {
   const rows = periodsOf(report);
   const series = buildSeries(rows, breakdownsOf(options.series), options.includeCost);
-  const agentColours = new Map(
-    options.series === 'agent' ? series.map((one) => [one.key, one.colour] as const) : [],
-  );
-  return captionLines(
-    report,
-    options,
-    series,
-    buildModelRanking(rows, options.includeCost ? 'cost' : 'tokens', agentColours),
-  );
+  return captionLines(report, options, series);
 }
 
 function layoutWidthFloor(requested: number, periods: number): number {
