@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { estimateFrame, estimateModel, estimateScript } from '../src/chart/estimate.js';
 import { renderReportHtml, renderReportSvg } from '../src/chart/index.js';
+import { tableTokens } from '../src/chart/page.js';
 import { displayModel, vendorOf } from '../src/chart/tokens.js';
 import type { DimensionBreakdown, ModelBreakdown, PeriodReport, ReportRow } from '../src/report.js';
 import type { TimeOfDayStatistics } from '../src/statistics.js';
@@ -405,7 +406,7 @@ describe('report figure', () => {
     // The four-segment token mix
     expect(html).toContain('class="mix"');
     // Vendor marks travel with the row, and models are chips rather than prose.
-    expect(html).toContain('class="marks"');
+    expect(html).toContain('class="marks grid"');
     expect(html).toContain('title="some-model">Some model<');
   });
 
@@ -498,15 +499,27 @@ describe('report figure', () => {
     expect(renderReportHtml(data, OPTIONS)).not.toMatch(/>actually paid ≈ /);
   });
 
-  it('shades the top and bottom tenth of each token-class column', () => {
+  it('shades each token-class column by percentile, not by magnitude', () => {
     const days = Array.from({ length: 10 }, (_, index) => ({
       ...row(`2026-07-${String(index + 1).padStart(2, '0')}`, { anthropic: 1 }),
       inputTokens: (index + 1) * 100,
     }));
     const html = renderReportHtml(report(days), OPTIONS);
-    expect(html).toContain('<td class="col-input hi">1,000</td>');
-    expect(html).toContain('<td class="col-input lo">100</td>');
-    expect(html).toContain('<td class="col-input">500</td>');
+    const shade = (pct: string, value: string, exact: string) =>
+      `<td class="col-input" style="background:color-mix(in srgb, var(--ink) ${pct}%, #fff)" title="${exact}">${value}</td>`;
+    expect(html).toContain(shade('40.0', '1K', '1,000'));
+    expect(html).toContain(shade('2.0', '100', '100'));
+    // The fifth of ten sits at 4/9 of the ramp, wherever its magnitude falls.
+    expect(html).toContain(shade('18.9', '500', '500'));
+  });
+
+  it('writes table token counts in whole thousands below a million and whole millions above', () => {
+    expect(tableTokens(640)).toBe('640');
+    expect(tableTokens(600_400)).toBe('600K');
+    expect(tableTokens(999_700)).toBe('1M');
+    expect(tableTokens(600_400_000)).toBe('600M');
+    // No B: it reads too close to M in a column of them.
+    expect(tableTokens(6_000_000_000)).toBe('6,000M');
   });
 
   it('marks the token-class table columns so a phone can fold them away', () => {

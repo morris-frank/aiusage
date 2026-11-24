@@ -49,7 +49,7 @@ export function renderReportHtml(report: PeriodReport, options: ChartOptions): s
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeXml(titleOf(options))} — aiusage</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@300..700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@300..700&family=Rock+Salt&display=swap">
 <style>
 *, *::before, *::after { corner-shape: squircle; }
 ${styles()}
@@ -101,8 +101,6 @@ figure.narrow { display: none; }
 svg { width: 100%; height: auto; display: block; }
 /* Many periods at the minimum bar width: only the plot pans, under a fixed y axis. */
 svg[data-view] { touch-action: pan-y; }
-[data-scroll] { cursor: grab; }
-[data-scroll]:active { cursor: grabbing; }
 
 /* Sources, notices and the figure's provenance, collapsed at the foot; print
    opens it (see the script). */
@@ -110,10 +108,12 @@ svg[data-view] { touch-action: pan-y; }
 .provenance summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 8px 0; }
 .provenance p { margin: 8px 0 0; }
 
+/* Title, start date and generation stamp on one baseline. */
+.masthead { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 16px; margin: 0 0 18px; }
 h1 { font-size: 34px; font-weight: 700; line-height: 1.15; color: var(--lime);
-     margin: 0 0 6px; letter-spacing: -0.03em; }
-.lede { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; display: flex; justify-content: space-between; gap: 12px; }
-.lede .generated { color: var(--subtle); font-size: 11.5px; }
+     margin: 0; letter-spacing: -0.03em; }
+.masthead .since { color: var(--muted); font-size: 17px; }
+.masthead .generated { color: var(--subtle); font-size: 11.5px; margin-left: auto; }
 .rule { height: 1px; background: var(--lime); margin: 0 0 28px; }
 h2 { font-size: 17px; font-weight: 400; color: var(--ink); margin: 44px 0 4px; }
 h2 + .note { margin: 0 0 14px; }
@@ -163,6 +163,9 @@ tfoot td.left { text-align: left; }
 /* Chips and marks */
 .marks { display: inline-flex; gap: 5px; align-items: center; }
 .marks svg { width: 13px; height: 13px; display: inline-block; }
+/* In the period table the marks stack two by two, so four sources fit one row. */
+td .marks.grid { display: inline-grid; grid-template-columns: repeat(2, 11px); gap: 3px; }
+td .marks.grid svg { width: 11px; height: 11px; }
 .chips { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; overflow: hidden; }
 /* One line per row, so every row is the same height and scrubbing never jumps:
    a long name shortens with an ellipsis (full id on hover), the count stays whole. */
@@ -206,9 +209,6 @@ ${ESTIMATE_STYLES}
 [data-show]:focus-visible rect { stroke: var(--ink); }
 @media (prefers-reduced-motion: reduce) { svg[data-view] [data-layer] { transition: none; } }
 .card .sub.paid { color: var(--muted); }
-/* Quantile tails of a token column: the busiest tenth inked, the quietest dimmed. */
-td.hi { background: var(--soft); color: var(--ink); font-weight: 500; }
-td.lo { color: var(--subtle); background: var(--cream); }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -324,23 +324,7 @@ for (const pane of document.querySelectorAll('svg[data-scroll]')) {
     x = Math.min(start, Math.max(min, to));
     pane.setAttribute('viewBox', x + ' ' + top + ' ' + width + ' ' + height);
   };
-  const scale = () => pane.getScreenCTM()?.a || 1;
-  pane.addEventListener('wheel', (event) => {
-    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.shiftKey ? event.deltaY : 0;
-    if (!delta) return;
-    event.preventDefault();
-    pan(x + delta / scale());
-  }, { passive: false });
-  let drag = null;
-  pane.addEventListener('pointerdown', (event) => {
-    drag = { from: event.clientX, x };
-    pane.setPointerCapture(event.pointerId);
-  });
-  pane.addEventListener('pointermove', (event) => {
-    if (drag) pan(drag.x - (event.clientX - drag.from) / scale());
-  });
-  for (const type of ['pointerup', 'pointercancel']) pane.addEventListener(type, () => { drag = null; });
-  // The header cards' as-of day: keep its column in view.
+  // Only the cards' scrub moves the pane: it keeps the as-of day's column in view.
   pane.addEventListener('reveal', (event) => {
     const [from, to] = event.detail;
     if (from < x) pan(from - 8); else if (to > x + width) pan(to - width + 8);
@@ -352,10 +336,9 @@ addEventListener('beforeprint', () => { for (const one of document.querySelector
 
 function headerBlock(report: PeriodReport, options: ChartOptions): string {
   const { since, until } = report.meta.range;
-  return `<h1>${escapeXml(titleOf(options))}</h1>
-<p class="lede">${escapeXml(
-    `${since} to ${until}`,
-  )}<span class="generated">generated ${escapeXml(report.meta.generatedAt)}</span></p>
+  return `<div class="masthead"><h1>${escapeXml(titleOf(options))}</h1>
+<span class="since" title="${escapeXml(`${since} to ${until}`)}">since ${escapeXml(since)}</span>
+<span class="generated">generated ${escapeXml(report.meta.generatedAt)}</span></div>
 <div class="rule"></div>`;
 }
 
@@ -642,12 +625,21 @@ function periodTable(
 ): string {
   const maxCost = Math.max(0, ...rows.map((row) => row.totalCost ?? 0));
   const noun = periodNoun(report, false);
-  const tails = {
-    input: tailsOf(rows.map((row) => row.inputTokens)),
-    output: tailsOf(rows.map((row) => row.outputTokens)),
-    cacheW: tailsOf(rows.map((row) => row.cacheCreationTokens)),
-    cacheR: tailsOf(rows.map((row) => row.cacheReadTokens)),
+  const heat = {
+    input: heatOf(rows.map((row) => row.inputTokens)),
+    output: heatOf(rows.map((row) => row.outputTokens)),
+    cacheW: heatOf(rows.map((row) => row.cacheCreationTokens)),
+    cacheR: heatOf(rows.map((row) => row.cacheReadTokens)),
   };
+  // Out of pocket per period under the stated plans; absent without them.
+  const paidRows = options.includeCost
+    ? rows.map((row) => paidOf([row], 1, options.billing)?.usd ?? null)
+    : [];
+  const withPaid = paidRows.length > 0 && paidRows.every((one) => one !== null);
+  const paidBy = new Map(rows.map((row, index) => [row.period, paidRows[index] ?? 0]));
+  const maxPaid = Math.max(0, ...paidBy.values());
+  const { since, until } = report.meta.range;
+  const paidTotal = withPaid ? paidOf(rows, daysBetween(since, until) + 1, options.billing) : null;
 
   // Newest first: the page is read for "what happened lately".
   const body = [...rows]
@@ -655,14 +647,15 @@ function periodTable(
     .map((row) => {
       const cells = [
         `<td class="left period">${escapeXml(row.period)}</td>`,
-        `<td class="left">${marks(row.metadata.agents.length > 0 ? row.metadata.agents : row.metadata.providers)}</td>`,
+        `<td class="left">${marks(row.metadata.agents.length > 0 ? row.metadata.agents : row.metadata.providers, true)}</td>`,
         `<td class="left col-models">${modelChips(row.modelsUsed)}</td>`,
-        `<td>${escapeXml(compactTokens(row.totalTokens))}${mixBar(row)}</td>`,
         ...(options.includeCost ? [costCell(row.totalCost ?? 0, maxCost)] : []),
-        number(row.inputTokens, `col-input${tails.input(row.inputTokens)}`),
-        number(row.outputTokens, `col-output${tails.output(row.outputTokens)}`),
-        number(row.cacheCreationTokens, `col-cache-w${tails.cacheW(row.cacheCreationTokens)}`),
-        number(row.cacheReadTokens, `col-cache-r${tails.cacheR(row.cacheReadTokens)}`),
+        ...(withPaid ? [costCell(paidBy.get(row.period) ?? 0, maxPaid)] : []),
+        `<td>${escapeXml(tableTokens(row.totalTokens))}${mixBar(row)}</td>`,
+        tokenCell(row.inputTokens, 'col-input', heat.input(row.inputTokens)),
+        tokenCell(row.outputTokens, 'col-output', heat.output(row.outputTokens)),
+        tokenCell(row.cacheCreationTokens, 'col-cache-w', heat.cacheW(row.cacheCreationTokens)),
+        tokenCell(row.cacheReadTokens, 'col-cache-r', heat.cacheR(row.cacheReadTokens)),
       ];
       return `  <tr data-period="${escapeXml(row.period)}">${cells.join('')}</tr>`;
     })
@@ -672,22 +665,24 @@ function periodTable(
     `<td class="left">Total</td>`,
     '<td></td>',
     '<td class="col-models"></td>',
-    `<td>${escapeXml(compactTokens(report.totals.totalTokens))}</td>`,
     ...(options.includeCost
       ? [`<td>${escapeXml(wholeUsd(report.totals.totalCost ?? 0))}</td>`]
       : []),
-    number(report.totals.inputTokens, 'col-input'),
-    number(report.totals.outputTokens, 'col-output'),
-    number(report.totals.cacheCreationTokens, 'col-cache-w'),
-    number(report.totals.cacheReadTokens, 'col-cache-r'),
+    ...(paidTotal ? [`<td>${escapeXml(wholeUsd(paidTotal.usd))}</td>`] : []),
+    `<td>${escapeXml(tableTokens(report.totals.totalTokens))}</td>`,
+    tokenCell(report.totals.inputTokens, 'col-input'),
+    tokenCell(report.totals.outputTokens, 'col-output'),
+    tokenCell(report.totals.cacheCreationTokens, 'col-cache-w'),
+    tokenCell(report.totals.cacheReadTokens, 'col-cache-r'),
   ];
 
   const head = [
     '',
     'Sources',
     'Models',
+    ...(options.includeCost ? ['API cost'] : []),
+    ...(withPaid ? ['Paid'] : []),
     'Tokens',
-    ...(options.includeCost ? ['Cost'] : []),
     'Input',
     'Output',
     'Cache W',
@@ -697,8 +692,9 @@ function periodTable(
     'left',
     'left',
     'left col-models',
-    '',
     ...(options.includeCost ? [''] : []),
+    ...(withPaid ? [''] : []),
+    '',
     'col-input',
     'col-output',
     'col-cache-w',
@@ -722,16 +718,37 @@ ${body}
 }
 
 /**
- * Marks a value in the top or bottom tenth of its column. Fewer than ten
- * periods have no tenth to speak of, so nothing is marked.
+ * A token column as a heat map by percentile, not by magnitude, so one huge day
+ * does not wash the rest out. Ties share their mean rank. Fewer than ten periods
+ * have no distribution to speak of, so nothing is shaded.
  */
-function tailsOf(values: readonly number[]): (value: number) => string {
-  if (values.length < 10) return () => '';
+function heatOf(values: readonly number[]): (value: number) => number | null {
+  if (values.length < 10) return () => null;
   const sorted = [...values].sort((a, b) => a - b);
-  const low = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? 0;
-  const high = sorted[Math.ceil((sorted.length - 1) * 0.9)] ?? 0;
-  if (low === high) return () => '';
-  return (value) => (value >= high ? ' hi' : value <= low ? ' lo' : '');
+  const top = sorted.length - 1;
+  return (value) => {
+    const below = sorted.findIndex((one) => one >= value);
+    const last = sorted.findLastIndex((one) => one <= value);
+    return (below + last) / 2 / top;
+  };
+}
+
+/** A token count in the table: whole thousands under a million, else whole millions. */
+export function tableTokens(value: number): string {
+  if (value < 1000) return String(Math.round(value));
+  const thousands = Math.round(value / 1e3);
+  if (thousands < 1000) return `${thousands}K`;
+  return `${Math.round(value / 1e6).toLocaleString('en-US')}M`;
+}
+
+/** A token cell: the readable count, the exact one on hover, shaded by percentile. */
+function tokenCell(value: number, cls: string, heat: number | null = null): string {
+  // Monochrome ink ramp, as the token classes are; capped so ink text stays legible.
+  const style =
+    heat === null
+      ? ''
+      : ` style="background:color-mix(in srgb, var(--ink) ${(2 + heat * 38).toFixed(1)}%, #fff)"`;
+  return `<td class="${cls}"${style} title="${value.toLocaleString('en-US')}">${escapeXml(tableTokens(value))}</td>`;
 }
 
 function sourceTable(report: PeriodReport, options: ChartOptions): string {
@@ -796,10 +813,6 @@ ${items}
 </ul>`;
 }
 
-function number(value: number, cls?: string): string {
-  return `<td${cls ? ` class="${cls}"` : ''}>${value.toLocaleString('en-US')}</td>`;
-}
-
 /**
  * The figure's provenance caption, spoilered. The SVG still draws its own copy
  * (a forwarded figure must carry its provenance), but on the page it collapses
@@ -843,7 +856,7 @@ function badge(kind: CostSource | 'mixed' | string): string {
 }
 
 /** Vendor marks for a set of source names, deduplicated by mark. */
-function marks(names: readonly string[]): string {
+function marks(names: readonly string[], grid = false): string {
   const vendors = [...new Set(names.map(vendorOf))];
   const inner = vendors
     .map(
@@ -851,7 +864,7 @@ function marks(names: readonly string[]): string {
         `<svg viewBox="0 0 13 13" xmlns="http://www.w3.org/2000/svg">${vendorMark(vendor, 0.5, 0.5, 12, vendorColour(vendor))}</svg>`,
     )
     .join('');
-  return `<span class="marks" title="${escapeXml(names.join(', '))}">${inner}</span>`;
+  return `<span class="marks${grid ? ' grid' : ''}" title="${escapeXml(names.join(', '))}">${inner}</span>`;
 }
 
 /** Models by their short names, one chip per name, the full ids on hover. */

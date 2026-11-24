@@ -600,18 +600,19 @@ export const ESTIMATE_STYLES = `.cards.trio { grid-template-columns: repeat(4, m
 @media (max-width: 520px) { .cards.trio { grid-template-columns: minmax(0, 1fr); } }
 .estimate-card { grid-column: span 2; outline: none; position: relative; overflow: hidden;
   padding: 16px 20px 0; min-height: 156px; touch-action: pan-y; cursor: ew-resize; }
-.estimate-card:focus, .estimate-card:focus-visible { border-style: solid; border-color: var(--ink); }
 .estimate-card .label, .estimate-card .value, .estimate-card .date { position: relative; z-index: 1;
   pointer-events: none; }
 .estimate-card .value { font-size: 24px; margin-top: 2px; }
+/* The headline number in the site's handwriting, a little smaller to sit at the same height. */
+.estimate-card [data-card-value] { font-family: 'Rock Salt', cursive; font-size: 20px; line-height: 1.5; }
 .estimate-card .date { position: absolute; top: 34px; right: 20px; font-size: 24px; line-height: 1.25;
   color: var(--muted); font-variant-numeric: tabular-nums; }
 /* Below the readouts, full width, down to the border: the curve sits in the card. */
 .estimate-card svg { position: absolute; left: 0; bottom: 0; top: 84px;
   width: 100%; height: calc(100% - 84px); }
-.estimate-card .sub.paid { position: relative; z-index: 1; pointer-events: none; }
-.estimate-card.has-paid { min-height: 176px; }
-.estimate-card.has-paid svg { top: 104px; height: calc(100% - 104px); }`;
+.estimate-card .sub.paid { position: relative; z-index: 1; pointer-events: none; margin-top: 8px; }
+.estimate-card.has-paid { min-height: 184px; }
+.estimate-card.has-paid svg { top: 112px; height: calc(100% - 112px); }`;
 
 /**
  * Wires the scrubs. Only a focused element takes the wheel, so the page scrolls
