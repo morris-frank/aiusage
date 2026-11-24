@@ -502,7 +502,8 @@ export function estimateCard(
     }
     return known + (inYear - knownDays) * rate;
   });
-  const yearSuffix = ` in ${year}, projected`;
+  // Label first, amount last: the amount changes on a scrub.
+  const yearPrefix = `${year} projected ≈ `;
   const title = `Posterior daily rate ≈ ${frames[last]?.label}; ${subLine(model, last, frames[last] as EstimateFrame)}. ${year} projected: cost of the year's days in the window plus every other day at that rate. Modelled, not billed.`;
 
   // Bars at fixed ticks over where the posterior travels in the scrub range;
@@ -538,7 +539,7 @@ export function estimateCard(
       mean,
       sd,
       yearMean,
-      yearSuffix,
+      yearPrefix,
       ticks,
       floor,
       first,
@@ -547,8 +548,8 @@ export function estimateCard(
     `<g data-part="bars">${bars}</g>`,
     model.unit === 'usd'
       ? {
-          line: `≈ ${format(yearMean[last] ?? 0)}${yearSuffix}`,
-          colour: TOKEN.muted,
+          line: `${yearPrefix}${format(yearMean[last] ?? 0)}`,
+          colour: PAID_INK,
           attr: 'data-card-year',
         }
       : undefined,
@@ -706,7 +707,7 @@ for (const card of cards) {
       if (data.paidCum) {
         const paid = cumulativePath(data.paidCum, at);
         paidLine.setAttribute('d', paid.line);
-        paidText.textContent = '≈ ' + amount(data.unit, paid.value) + ' actually paid' + data.paidRest;
+        paidText.textContent = 'actually paid ≈ ' + amount(data.unit, paid.value) + data.paidRest;
       }
     });
     continue;
@@ -732,7 +733,7 @@ for (const card of cards) {
       bar.setAttribute('y', 100 - g); bar.setAttribute('height', g);
     });
     value.textContent = '≈ ' + amount(data.unit, mean);
-    if (year) year.textContent = '≈ ' + amount(data.unit, interp(data.yearMean, at)) + data.yearSuffix;
+    if (year) year.textContent = data.yearPrefix + amount(data.unit, interp(data.yearMean, at));
     date.textContent = dayOf(at);
   });
 }

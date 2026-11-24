@@ -292,7 +292,7 @@ describe('report figure', () => {
     );
     expect(html).toContain('data-card-value>≈ $1<');
     // 25 known days at $1 plus the other 340 days of 2026 at $1.
-    expect(html).toContain('data-card-year style="color:#4A4A4A">≈ $365 in 2026, projected<');
+    expect(html).toContain('data-card-year style="color:#939393">2026 projected ≈ $365<');
     expect(html).not.toContain('July · projected');
   });
 
@@ -456,7 +456,7 @@ describe('report figure', () => {
       },
     );
     expect(page).not.toContain('data-expanded');
-    expect(page).toContain('data-scroll="76"');
+    expect(page).toContain('data-scroll="50"');
   });
 
   it('spoilers the provenance caption on the page, and the page figure carries no hidden copy', () => {
@@ -493,9 +493,9 @@ describe('report figure', () => {
     const html = renderReportHtml(data, { ...OPTIONS, billing });
     // 10 days of a $36.50/month plan is $12; OpenRouter's $10 metered; Gemini's
     // $5 has no stated plan, so it stays in the sum at API rates.
-    expect(html).toContain('≈ $27 actually paid');
+    expect(html).toContain('actually paid ≈ $27');
     // The page script names the phrase too, so look for it as rendered text.
-    expect(renderReportHtml(data, OPTIONS)).not.toMatch(/>≈ [^<]* actually paid/);
+    expect(renderReportHtml(data, OPTIONS)).not.toMatch(/>actually paid ≈ /);
   });
 
   it('shades the top and bottom tenth of each token-class column', () => {

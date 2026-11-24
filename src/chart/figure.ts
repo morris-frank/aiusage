@@ -235,7 +235,11 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
   const width = options.interactive
     ? requested
     : Math.max(requested, layoutWidthFloor(requested, rows.length));
-  const layout = layoutFor(requested);
+  // The page's figure has no end labels to make room for: the y labels hang in a
+  // narrow left gutter and the plot runs to the right edge, square with the cards.
+  const layout = options.interactive
+    ? { ...layoutFor(requested), left: 50, rightMargin: 2 }
+    : layoutFor(requested);
   const margin = layout.left;
   const right = width - layout.rightMargin;
   const series = buildSeries(rows, breakdownsOf(options.series), options.includeCost);

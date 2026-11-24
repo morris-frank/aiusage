@@ -163,10 +163,15 @@ tfoot td.left { text-align: left; }
 /* Chips and marks */
 .marks { display: inline-flex; gap: 5px; align-items: center; }
 .marks svg { width: 13px; height: 13px; display: inline-block; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; overflow: hidden; }
+/* One line per row, so every row is the same height and scrubbing never jumps:
+   a long name shortens with an ellipsis (full id on hover), the count stays whole. */
 .chip { font-size: 10.5px; padding: 1px 7px; border: 1px solid var(--rule); border-radius: 9999px;
-        color: var(--muted); white-space: nowrap; }
-.chip.more { border-style: dashed; }
+        color: var(--muted); white-space: nowrap; min-width: 0; max-width: 8em;
+        overflow: hidden; text-overflow: ellipsis; }
+.chip.more { border-style: dashed; flex: none; }
+/* A fixed share of the table, so the chips shrink into it instead of widening it. */
+td.col-models { width: 26%; max-width: 0; }
 
 /* A cost cell carries its own scale: the bar is the row's share of the largest. */
 .amount { display: block; }
@@ -508,7 +513,8 @@ function paidOf(
 }
 
 function paidLine(paid: Paid, noun: string, suffix = ''): string {
-  return `≈ ${wholeUsd(paid.usd)}${suffix} ${noun}`;
+  // The amount last: it changes on a scrub, and text after it would shift.
+  return `${noun} ≈ ${wholeUsd(paid.usd)}${suffix}`;
 }
 
 /** Days of the run rate: four whole weeks, so weekends weigh what they do in a month. */
@@ -849,7 +855,7 @@ function marks(names: readonly string[]): string {
 }
 
 /** Models by their short names, one chip per name, the full ids on hover. */
-function modelChips(ids: readonly string[], limit = 3): string {
+function modelChips(ids: readonly string[], limit = 2): string {
   const byName = new Map<string, string[]>();
   for (const id of ids) {
     const name = displayModel(id);
