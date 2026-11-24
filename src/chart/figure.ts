@@ -769,8 +769,12 @@ function tabsPanel(
     });
     if (shapes.every((shape) => shape.height === 0)) return;
     const data = shapes.map((shape) => `data-${shape.measure}="${shape.y} ${shape.height}"`);
+    // An edged segment is drawn half a stroke narrower on each side, so every
+    // bar is the same width whether or not its colour needs an edge.
+    const fill = paint(segment.colour);
+    const inset = fill.includes('stroke') ? 0.375 : 0;
     parts.push(
-      `<rect x="${round(segment.x)}" y="${round(segment.y)}" width="${round(segment.width)}" height="${round(segment.height)}" ${paint(segment.colour)} ${data.join(' ')}/>`,
+      `<rect x="${round(segment.x + inset)}" y="${round(segment.y)}" width="${round(segment.width - 2 * inset)}" height="${round(segment.height)}" ${fill} ${data.join(' ')}/>`,
     );
   });
   parts.push(

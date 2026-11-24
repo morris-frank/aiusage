@@ -164,7 +164,8 @@ tfoot td.left { text-align: left; }
 .marks { display: inline-flex; gap: 5px; align-items: center; }
 .marks svg { width: 13px; height: 13px; display: inline-block; }
 /* In the period table the marks stack two by two, so four sources fit one row. */
-td .marks.grid { display: inline-grid; grid-template-columns: repeat(2, 11px); gap: 3px; }
+td .marks.grid { display: inline-grid; grid-template-rows: repeat(2, 11px); grid-auto-flow: column;
+                 grid-auto-columns: 11px; gap: 3px; }
 td .marks.grid svg { width: 11px; height: 11px; }
 .chips { display: flex; flex-wrap: nowrap; gap: 4px; min-width: 0; overflow: hidden; }
 /* One line per row, so every row is the same height and scrubbing never jumps:
@@ -173,6 +174,9 @@ td .marks.grid svg { width: 11px; height: 11px; }
         color: var(--muted); white-space: nowrap; min-width: 0; max-width: 8em;
         overflow: hidden; text-overflow: ellipsis; }
 .chip.more { border-style: dashed; flex: none; }
+td.heat { background-image: radial-gradient(circle, #1111118c var(--dot), transparent calc(var(--dot) + 0.4px));
+          background-size: 6px 6px; }
+td.heat span { background: #fff; padding: 1px 4px; border-radius: 3px; }
 /* A fixed share of the table, so the chips shrink into it instead of widening it. */
 td.col-models { width: 26%; max-width: 0; }
 
@@ -718,18 +722,21 @@ ${body}
 }
 
 /**
- * A token column as a heat map by percentile, not by magnitude, so one huge day
- * does not wash the rest out. Ties share their mean rank. Fewer than ten periods
- * have no distribution to speak of, so nothing is shaded.
+ * A token column's heat, 0…1: half its percentile (ties share their mean rank),
+ * so one huge day does not wash the rest out, and half its share of the column's
+ * maximum, so the top days still stand apart from each other. Fewer than ten
+ * periods have no distribution to speak of, so nothing is shaded.
  */
 function heatOf(values: readonly number[]): (value: number) => number | null {
   if (values.length < 10) return () => null;
   const sorted = [...values].sort((a, b) => a - b);
   const top = sorted.length - 1;
+  const max = sorted[top] ?? 0;
   return (value) => {
     const below = sorted.findIndex((one) => one >= value);
     const last = sorted.findLastIndex((one) => one <= value);
-    return (below + last) / 2 / top;
+    const rank = (below + last) / 2 / top;
+    return (rank + (max > 0 ? value / max : 0)) / 2;
   };
 }
 
@@ -743,12 +750,11 @@ export function tableTokens(value: number): string {
 
 /** A token cell: the readable count, the exact one on hover, shaded by percentile. */
 function tokenCell(value: number, cls: string, heat: number | null = null): string {
-  // Monochrome ink ramp, as the token classes are; capped so ink text stays legible.
-  const style =
-    heat === null
-      ? ''
-      : ` style="background:color-mix(in srgb, var(--ink) ${(2 + heat * 38).toFixed(1)}%, #fff)"`;
-  return `<td class="${cls}"${style} title="${value.toLocaleString('en-US')}">${escapeXml(tableTokens(value))}</td>`;
+  // A dot screen like the cards' surface, the dots growing with the heat; the
+  // count sits on a white label so it reads over the densest cells.
+  const count = escapeXml(tableTokens(value));
+  const shade = heat === null ? '' : ` heat" style="--dot:${(0.4 + heat * 1.8).toFixed(2)}px`;
+  return `<td class="${cls}${shade}" title="${value.toLocaleString('en-US')}">${heat === null ? count : `<span>${count}</span>`}</td>`;
 }
 
 function sourceTable(report: PeriodReport, options: ChartOptions): string {

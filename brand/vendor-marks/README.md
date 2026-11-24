@@ -7,7 +7,7 @@ network, and are drawn in the report's series colour rather than the vendor's.
 All of them come from LobeHub's icon set, MIT-licensed ([LICENSE](LICENSE), © 2023 LobeHub):
 package `@lobehub/icons-static-svg` 1.95.1, the monochrome `icons/<file>.svg`, paths copied
 verbatim. Upstream: <https://github.com/lobehub/lobe-icons>. No vendor's own published mark
-was needed — LobeHub carries all eight.
+was needed — LobeHub carries all ten.
 
 | Mark          | Drawn for                                   | File              |
 | ------------- | ------------------------------------------- | ----------------- |
@@ -20,6 +20,7 @@ was needed — LobeHub carries all eight.
 | `gemini`      | Gemini the product (Gemini models and CLI)  | `gemini.svg`      |
 | `googlecloud` | anything named as run on GCP / Vertex       | `googlecloud.svg` |
 | `pi`          | Pi Agent (pi.dev; LobeHub's "Pi" is that)   | `pi.svg`          |
+| `zai`         | Z.ai / Zhipu, GLM models                    | `zai.svg`         |
 
 Local agent usage without a named agent keeps a drawn terminal prompt, and a name that
 identifies no vendor keeps the neutral ring. Logos remain their owners' trademarks; they

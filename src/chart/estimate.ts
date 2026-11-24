@@ -195,6 +195,8 @@ export type CardKind = 'rate' | 'total' | 'price' | 'leverage';
  * the report's only hues are vendor colours (AGENTS.md rule 13).
  */
 const PAID_INK = '#939393';
+/** The thinnest price band drawn, in the card's 100 vertical units (about 2px). */
+const BAND_FLOOR = 3;
 
 /** Catmull-Rom through whole-day keyframes: the scrub moves between days on a smooth curve. */
 export function interp(series: number[], at: number): number {
@@ -375,6 +377,7 @@ export function estimateCard(
     const index = new Map(days.map((day, k) => [day, k]));
     const byVendor = new Map<VendorId, number[]>();
     const names = new Map<VendorId, string>();
+    const vendorCost = new Map<VendorId, number>();
     for (const row of report.daily ?? []) {
       const k = index.get(row.period);
       if (k === undefined) continue;
@@ -386,6 +389,7 @@ export function estimateCard(
         const agent = one.agents[0] ?? one.provider;
         const vendor = vendorOf(agent);
         if (!names.has(vendor)) names.set(vendor, agent);
+        vendorCost.set(vendor, (vendorCost.get(vendor) ?? 0) + (one.cost ?? 0));
         const series = byVendor.get(vendor) ?? days.map(() => 0);
         series[k] = (series[k] ?? 0) + one.inputTokens + one.outputTokens + one.cacheCreationTokens;
         byVendor.set(vendor, series);
@@ -436,20 +440,34 @@ export function estimateCard(
     // the line (each band is its share of the price's height), largest at the bottom.
     let bands: { lower: number[]; upper: number[]; colour: string; name: string }[] = [];
     if (kind === 'price') {
-      const totals = days.map((_, d) => decay(tokens, d));
+      // The figure's stack order (largest cost at the bottom), so the two agree.
+      const order = [...byVendor.keys()].sort(
+        (a, b) => (vendorCost.get(b) ?? 0) - (vendorCost.get(a) ?? 0) || a.localeCompare(b),
+      );
+      const heights = order.map((vendor) =>
+        days.map((_, d) => decay(byVendor.get(vendor) ?? [], d)),
+      );
+      // Under BAND_FLOOR (of the card's 100 units) a band is dropped and the rest
+      // fill its place: a sliver a pixel high only flickers as the day moves.
+      for (const [d] of days.entries()) {
+        const height = (((series[d] ?? 0) * 0.92) / top) * 100;
+        const total = heights.reduce((sum, one) => sum + (one[d] ?? 0), 0) || 1;
+        for (const one of heights) {
+          if (((one[d] ?? 0) / total) * height < BAND_FLOOR) one[d] = 0;
+        }
+      }
+      const kept = days.map((_, d) => heights.reduce((sum, one) => sum + (one[d] ?? 0), 0) || 1);
       let floor = days.map(() => 0);
-      bands = [...byVendor.entries()]
-        .sort(([, a], [, b]) => b.reduce((x, y) => x + y, 0) - a.reduce((x, y) => x + y, 0))
-        .map(([vendor, values]) => {
-          const lower = floor;
-          const upper = days.map(
-            (_, d) =>
-              (lower[d] ?? 0) +
-              ((decay(values, d) / ((totals[d] ?? 0) || 1)) * (series[d] ?? 0) * 0.92) / top,
-          );
-          floor = upper;
-          return { lower, upper, colour: vendorColour(vendor), name: names.get(vendor) ?? vendor };
-        });
+      bands = order.map((vendor, index) => {
+        const lower = floor;
+        const upper = days.map(
+          (_, d) =>
+            (lower[d] ?? 0) +
+            (((heights[index]?.[d] ?? 0) / (kept[d] ?? 1)) * (series[d] ?? 0) * 0.92) / top,
+        );
+        floor = upper;
+        return { lower, upper, colour: vendorColour(vendor), name: names.get(vendor) ?? vendor };
+      });
     }
     const text = (value: number) =>
       kind === 'price' ? `${compactValue(model, value)} / M` : `${value.toFixed(1)}×`;

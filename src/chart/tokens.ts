@@ -86,6 +86,7 @@ export type VendorId =
   | 'gemini'
   | 'googlecloud'
   | 'pi'
+  | 'zai'
   | 'local'
   | 'other';
 
@@ -110,6 +111,8 @@ export function vendorColour(vendor: VendorId): string {
     case 'openrouter':
       return '#C8FF01';
     case 'pi':
+    // Z.ai's mark is monochrome black; no brand hue to borrow.
+    case 'zai':
       return '#000000';
     case 'local':
     case 'other':
@@ -192,6 +195,7 @@ export function vendorOf(name: string): VendorId {
   if (/(^|[/\s[])antigravity/.test(key)) return 'antigravity';
   if (/(^|[/\s[])(vertex|gcp|google[-\s]cloud)/.test(key)) return 'googlecloud';
   if (/(^|[/\s[])gemini/.test(key)) return 'gemini';
+  if (/(^|[/\s[])(z-ai|zai|zhipu|glm)/.test(key)) return 'zai';
   if (/openrouter|router/.test(key)) return 'openrouter';
   if (/ccusage|local/.test(key)) return 'local';
   return 'other';
@@ -230,6 +234,9 @@ const VENDOR_PATHS: Record<Exclude<VendorId, 'local' | 'other'>, readonly string
     'M4.914 5.18c3.32-3.762 9.095-4.247 12.91-1.13l.362.312.252.232A9.4 9.4 0 0121.02 8.93 6.778 6.778 0 0124 14.597c-.028 3.744-3.087 6.726-6.83 6.697H6.739a6.746 6.746 0 01-3.869-1.222l-.224-.162-.302-.247a6.778 6.778 0 01.54-10.673l-.004.001a9.644 9.644 0 012.034-3.812zm10.345 2.11c-2.143-1.734-5.282-1.46-7.138.578l-.026.025a6.77 6.77 0 014.045 2.523l-3.023 3.023a2.606 2.606 0 10-2.379 3.682h10.43c1.44 0 2.607-1.137 2.607-2.576a2.607 2.607 0 00-2.606-2.607v-.52a5.205 5.205 0 00-1.685-3.933l-.225-.195z',
   ],
   pi: ['M1 1h16.5v11H12v5.5H6.5V23H1V1zm5.5 5.5V12H12V6.5H6.5z', 'M17.5 12H23v11h-5.5V12z'],
+  zai: [
+    'M12.105 2L9.927 4.953H.653L2.83 2h9.276zM23.254 19.048L21.078 22h-9.242l2.174-2.952h9.244zM24 2L9.264 22H0L14.736 2H24z',
+  ],
 };
 
 /**

@@ -185,6 +185,8 @@ describe('report figure', () => {
     expect(vendorOf('anthropic/claude-opus-4-6')).toBe('claude');
     expect(vendorOf('anthropic')).toBe('anthropic');
     expect(vendorOf('codex')).toBe('openai');
+    expect(vendorOf('z-ai/glm-5.2')).toBe('zai');
+    expect(vendorOf('glm-5.2')).toBe('zai');
     expect(vendorOf('pi')).toBe('pi');
     expect(vendorOf('antigravity')).toBe('antigravity');
     expect(vendorOf('gemini-2.5-pro')).toBe('gemini');
@@ -499,18 +501,18 @@ describe('report figure', () => {
     expect(renderReportHtml(data, OPTIONS)).not.toMatch(/>actually paid ≈ /);
   });
 
-  it('shades each token-class column by percentile, not by magnitude', () => {
+  it('shades each token-class column by half percentile, half share of the maximum', () => {
     const days = Array.from({ length: 10 }, (_, index) => ({
       ...row(`2026-07-${String(index + 1).padStart(2, '0')}`, { anthropic: 1 }),
       inputTokens: (index + 1) * 100,
     }));
     const html = renderReportHtml(report(days), OPTIONS);
-    const shade = (pct: string, value: string, exact: string) =>
-      `<td class="col-input" style="background:color-mix(in srgb, var(--ink) ${pct}%, #fff)" title="${exact}">${value}</td>`;
-    expect(html).toContain(shade('40.0', '1K', '1,000'));
-    expect(html).toContain(shade('2.0', '100', '100'));
-    // The fifth of ten sits at 4/9 of the ramp, wherever its magnitude falls.
-    expect(html).toContain(shade('18.9', '500', '500'));
+    const shade = (dot: string, value: string, exact: string) =>
+      `<td class="col-input heat" style="--dot:${dot}px" title="${exact}"><span>${value}</span></td>`;
+    // Top rank and the maximum: the densest screen.
+    expect(html).toContain(shade('2.20', '1K', '1,000'));
+    // The fifth of ten: (4/9 + 1/2) / 2 of the ramp.
+    expect(html).toContain(shade('1.25', '500', '500'));
   });
 
   it('writes table token counts in whole thousands below a million and whole millions above', () => {
