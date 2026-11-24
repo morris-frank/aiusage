@@ -508,11 +508,13 @@ describe('report figure', () => {
     }));
     const html = renderReportHtml(report(days), OPTIONS);
     const shade = (dot: string, value: string, exact: string) =>
-      `<td class="col-input heat" style="--dot:${dot}px" title="${exact}"><span>${value}</span></td>`;
+      new RegExp(
+        `<td class="col-input heat" style="--dot:${dot}px;[^"]*" title="${exact}"><span>${value}</span></td>`,
+      );
     // Top rank and the maximum: the densest screen.
-    expect(html).toContain(shade('2.20', '1K', '1,000'));
+    expect(html).toMatch(shade('1.70', '1K', '1,000'));
     // The fifth of ten: (4/9 + 1/2) / 2 of the ramp.
-    expect(html).toContain(shade('1.25', '500', '500'));
+    expect(html).toMatch(shade('1.17', '500', '500'));
   });
 
   it('writes table token counts in whole thousands below a million and whole millions above', () => {

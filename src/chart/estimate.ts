@@ -197,6 +197,8 @@ export type CardKind = 'rate' | 'total' | 'price' | 'leverage';
 const PAID_INK = '#939393';
 /** The thinnest price band drawn, in the card's 100 vertical units (about 2px). */
 const BAND_FLOOR = 3;
+/** How far the price bands stop under the 2.5px price line, in the same units. */
+const LINE_CLEARANCE = 2;
 
 /** Catmull-Rom through whole-day keyframes: the scrub moves between days on a smooth curve. */
 export function interp(series: number[], at: number): number {
@@ -447,10 +449,15 @@ export function estimateCard(
       const heights = order.map((vendor) =>
         days.map((_, d) => decay(byVendor.get(vendor) ?? [], d)),
       );
+      // The stack stops LINE_CLEARANCE under the line (the line's own half
+      // width), so the line sits on the bands rather than over them.
+      const stackTop = days.map((_, d) =>
+        Math.max(0, ((series[d] ?? 0) * 0.92) / top - LINE_CLEARANCE / 100),
+      );
       // Under BAND_FLOOR (of the card's 100 units) a band is dropped and the rest
       // fill its place: a sliver a pixel high only flickers as the day moves.
       for (const [d] of days.entries()) {
-        const height = (((series[d] ?? 0) * 0.92) / top) * 100;
+        const height = (stackTop[d] ?? 0) * 100;
         const total = heights.reduce((sum, one) => sum + (one[d] ?? 0), 0) || 1;
         for (const one of heights) {
           if (((one[d] ?? 0) / total) * height < BAND_FLOOR) one[d] = 0;
@@ -462,8 +469,7 @@ export function estimateCard(
         const lower = floor;
         const upper = days.map(
           (_, d) =>
-            (lower[d] ?? 0) +
-            (((heights[index]?.[d] ?? 0) / (kept[d] ?? 1)) * (series[d] ?? 0) * 0.92) / top,
+            (lower[d] ?? 0) + ((heights[index]?.[d] ?? 0) / (kept[d] ?? 1)) * (stackTop[d] ?? 0),
         );
         floor = upper;
         return { lower, upper, colour: vendorColour(vendor), name: names.get(vendor) ?? vendor };
@@ -494,7 +500,7 @@ export function estimateCard(
               )
               .join('')
           : ''
-      }<path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="${kind === 'leverage' ? 2.5 : 1.25}" vector-effect="non-scaling-stroke"/>`,
+      }<path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="2.5" vector-effect="non-scaling-stroke"/>`,
     );
   }
 

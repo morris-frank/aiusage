@@ -151,10 +151,10 @@ thead th { position: sticky; top: 0; background: #fff; text-align: right; font-w
            color: var(--muted); font-size: 10.5px; letter-spacing: 0.06em;
            text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--rule); }
 thead th.left { text-align: left; }
-tbody td { padding: 7px 10px; border-bottom: 1px solid var(--grid); text-align: right;
+/* No rules between rows: the heat map and the bars carry the rhythm. */
+tbody td { padding: 7px 10px; text-align: right;
            vertical-align: middle; }
 tbody td.left { text-align: left; }
-tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
 tfoot td { padding: 9px 10px; text-align: right; font-weight: 500; color: var(--ink);
            border-top: 1px solid var(--ink); }
 tfoot td.left { text-align: left; }
@@ -174,9 +174,14 @@ td .marks.grid svg { width: 11px; height: 11px; }
         color: var(--muted); white-space: nowrap; min-width: 0; max-width: 8em;
         overflow: hidden; text-overflow: ellipsis; }
 .chip.more { border-style: dashed; flex: none; }
-td.heat { background-image: radial-gradient(circle, #1111118c var(--dot), transparent calc(var(--dot) + 0.4px));
-          background-size: 6px 6px; }
-td.heat span { background: #fff; padding: 1px 4px; border-radius: 3px; }
+/* The dot screen is a mask over a horizontal gradient: dot size is the cell's
+   own, the ink fades into each neighbour's across the cell edges. */
+td.heat::before { content: ''; position: absolute; inset: 0;
+  background: linear-gradient(to right, rgb(17 17 17 / var(--al)), rgb(17 17 17 / var(--a)) 35%,
+                              rgb(17 17 17 / var(--a)) 65%, rgb(17 17 17 / var(--ar)));
+  -webkit-mask: radial-gradient(circle, #000 var(--dot), transparent calc(var(--dot) + 0.4px)) 0 0 / 6px 6px;
+  mask: radial-gradient(circle, #000 var(--dot), transparent calc(var(--dot) + 0.4px)) 0 0 / 6px 6px; }
+td.heat span { position: relative; background: #fff; padding: 0 0.2em; border-radius: 3px; }
 /* A fixed share of the table, so the chips shrink into it instead of widening it. */
 td.col-models { width: 26%; max-width: 0; }
 
@@ -656,10 +661,12 @@ function periodTable(
         ...(options.includeCost ? [costCell(row.totalCost ?? 0, maxCost)] : []),
         ...(withPaid ? [costCell(paidBy.get(row.period) ?? 0, maxPaid)] : []),
         `<td>${escapeXml(tableTokens(row.totalTokens))}${mixBar(row)}</td>`,
-        tokenCell(row.inputTokens, 'col-input', heat.input(row.inputTokens)),
-        tokenCell(row.outputTokens, 'col-output', heat.output(row.outputTokens)),
-        tokenCell(row.cacheCreationTokens, 'col-cache-w', heat.cacheW(row.cacheCreationTokens)),
-        tokenCell(row.cacheReadTokens, 'col-cache-r', heat.cacheR(row.cacheReadTokens)),
+        ...heatCells([
+          [row.inputTokens, 'col-input', heat.input(row.inputTokens)],
+          [row.outputTokens, 'col-output', heat.output(row.outputTokens)],
+          [row.cacheCreationTokens, 'col-cache-w', heat.cacheW(row.cacheCreationTokens)],
+          [row.cacheReadTokens, 'col-cache-r', heat.cacheR(row.cacheReadTokens)],
+        ]),
       ];
       return `  <tr data-period="${escapeXml(row.period)}">${cells.join('')}</tr>`;
     })
@@ -748,13 +755,27 @@ export function tableTokens(value: number): string {
   return `${Math.round(value / 1e6).toLocaleString('en-US')}M`;
 }
 
-/** A token cell: the readable count, the exact one on hover, shaded by percentile. */
-function tokenCell(value: number, cls: string, heat: number | null = null): string {
-  // A dot screen like the cards' surface, the dots growing with the heat; the
-  // count sits on a white label so it reads over the densest cells.
-  const count = escapeXml(tableTokens(value));
-  const shade = heat === null ? '' : ` heat" style="--dot:${(0.4 + heat * 1.8).toFixed(2)}px`;
-  return `<td class="${cls}${shade}" title="${value.toLocaleString('en-US')}">${heat === null ? count : `<span>${count}</span>`}</td>`;
+/** A token cell: the readable count, the exact one on hover. */
+function tokenCell(value: number, cls: string): string {
+  return `<td class="${cls}" title="${value.toLocaleString('en-US')}">${escapeXml(tableTokens(value))}</td>`;
+}
+
+/**
+ * A row's token cells as one strip of heat: a dot screen like the cards'
+ * surface, from fainter than those dots to near-black, the dots growing with
+ * the heat. Each cell's ink meets its neighbours' halfway at the shared edge,
+ * so the strip shades smoothly; the count sits on a white label.
+ */
+function heatCells(cells: readonly [number, string, number | null][]): string[] {
+  const ink = (heat: number) => 0.05 + heat * 0.85;
+  return cells.map(([value, cls, heat], index) => {
+    if (heat === null) return tokenCell(value, cls);
+    const own = ink(heat);
+    const edge = (other: number | null | undefined) =>
+      ((own + (other === null || other === undefined ? own : ink(other))) / 2).toFixed(3);
+    const style = `--dot:${(0.7 + heat * 1).toFixed(2)}px;--a:${own.toFixed(3)};--al:${edge(cells[index - 1]?.[2])};--ar:${edge(cells[index + 1]?.[2])}`;
+    return `<td class="${cls} heat" style="${style}" title="${value.toLocaleString('en-US')}"><span>${escapeXml(tableTokens(value))}</span></td>`;
+  });
 }
 
 function sourceTable(report: PeriodReport, options: ChartOptions): string {
