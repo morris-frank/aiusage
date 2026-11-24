@@ -266,7 +266,9 @@ always wins; `--json` is unaffected either way.
 
 Dates accept `YYYY-MM-DD` or `YYYYMMDD`. The default window is the trailing 30 days
 (OpenRouter's hard lookback limit, so the default is a window every platform can answer),
-except for `report`, which defaults to 90 days so a daily figure has enough of a trend to draw.
+except for `report`, which starts at the first day `AIUSAGE_LOCAL_LEDGER` holds, so the figure
+shows all the history kept (90 days without a ledger). Platforms with a shorter lookback report
+what they can and say so.
 
 Exit codes: `0` success, `1` a platform failed (its rows are missing and a notice says so),
 `2` bad invocation.

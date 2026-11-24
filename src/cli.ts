@@ -34,6 +34,7 @@ import {
 } from './dates.js';
 import { loadPriceBook, type PriceBook } from './pricing/index.js';
 import type { CommandRunner } from './providers/ccusage.js';
+import { firstLedgerDay } from './providers/ledger.js';
 import {
   type RenderOptions,
   renderDimensionReport,
@@ -87,7 +88,8 @@ USAGE
   aiusage providers                  what each configured source can answer
   aiusage pricing [--model <id>]     unit prices, with their source
   aiusage report [--out <file>]      the report figure (SVG, or --format html);
-                                      90-day default window, --local implied,
+                                      starts at the local ledger's first day
+                                      (90 days without one), --local implied,
                                       saved as HTML to $AIUSAGE_REPORT_DIR (default:
                                       the working directory) unless --print or
                                       --out says otherwise
@@ -96,7 +98,7 @@ OPTIONS
   -j, --json                 machine-readable output (ccusage-compatible shape)
   -s, --since <date>         start of the window (YYYY-MM-DD or YYYYMMDD)
   -u, --until <date>         end of the window, inclusive
-      --days <n>             window as "the last n days" (default: 30, 90 for report)
+      --days <n>             window as "the last n days" (default: 30; report: see above)
   -z, --timezone <tz>        IANA timezone for grouping (default: UTC)
   -p, --provider <list>      restrict to providers: ${PROVIDER_IDS.join(',')}
       --split <list>         breakdowns to include: ${SPLIT_DIMENSIONS.join(',')} (default: model)
@@ -160,6 +162,8 @@ type ParsedOptions = {
   granularity: Granularity | null;
   /** Ask the platforms that support them for hourly buckets. */
   hourly: boolean;
+  /** `report` with no --since/--days: start at the ledger's first day. */
+  fromFirstDay: boolean;
 };
 
 export type CliEnvironment = {
@@ -197,6 +201,11 @@ export async function run(environment: CliEnvironment): Promise<number> {
   } catch (error) {
     environment.stderr((error as ConfigError).message);
     return 2;
+  }
+
+  if (options.fromFirstDay && options.local && config.localLedger !== null) {
+    const first = await firstLedgerDay(config.localLedger, options.timeZone);
+    if (first !== null && first < options.range.since) options.range.since = first;
   }
 
   const http = createHttpClient(config);
@@ -589,6 +598,7 @@ export function parseCli(environment: CliEnvironment): ParsedOptions | null {
     command,
     json: values.json === true,
     range: parseRange(values, environment.now, command),
+    fromFirstDay: command === 'report' && values.since === undefined && values.days === undefined,
     timeZone: parseTimeZone(values.timezone),
     providers: parseProviders(values.provider),
     splits: parseSplits(values.split, command),

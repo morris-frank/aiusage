@@ -22,7 +22,7 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { zonedDayEnd, zonedDayStart } from '../dates.js';
+import { dayKey, zonedDayEnd, zonedDayStart } from '../dates.js';
 import type { Diagnostic, UsageRecord } from '../types.js';
 import type { CollectContext } from './types.js';
 
@@ -115,6 +115,21 @@ export async function mergeWithLedger(
     });
   }
   return { records, diagnostics };
+}
+
+/**
+ * The first day the ledger holds, in `timeZone`; null when it is empty or
+ * unreadable. `report` starts there by default, so the figure shows all the
+ * local history kept rather than a trailing window of it.
+ */
+export async function firstLedgerDay(path: string, timeZone: string): Promise<string | null> {
+  const rows = await read(path).then(
+    (ledger) => ledger.rows,
+    () => [],
+  );
+  let first: string | null = null;
+  for (const row of rows) if (first === null || row.bucketStart < first) first = row.bucketStart;
+  return first === null ? null : dayKey(first, timeZone);
 }
 
 async function read(path: string): Promise<LedgerFile> {

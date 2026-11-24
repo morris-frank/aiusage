@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -557,6 +557,33 @@ describe('the local source and the figure', () => {
     );
     expect(written[0]?.content.startsWith('<!doctype html>')).toBe(true);
     expect(err.join('\n')).toContain('Wrote /home/tester/work/');
+  });
+
+  it("starts report at the ledger's first day, so kept history is never cut off by a window", async () => {
+    const ledger = join(await mkdtemp(join(tmpdir(), 'aiusage-ledger-')), 'ledger.json');
+    const row = {
+      timeZone: 'UTC',
+      bucketStart: '2026-01-05T00:00:00.000Z',
+      bucketEnd: '2026-01-05T23:59:59.999Z',
+      agent: 'claude',
+      model: 'claude-opus-4',
+      input: 1,
+      output: 1,
+      cacheCreation: 0,
+      cacheRead: 0,
+      costMicros: null,
+    };
+    await writeFile(ledger, JSON.stringify({ version: 1, rows: [row] }));
+    const { cli, out } = await environment(
+      ['report', '--json', ...offline],
+      { AIUSAGE_LOCAL_LEDGER: ledger },
+      { runCommand: ccusageRunner(CCUSAGE_PAYLOAD) },
+    );
+    await run(cli);
+    expect(JSON.parse(out.join('\n')).meta.range).toEqual({
+      since: '2026-01-05',
+      until: '2026-07-26',
+    });
   });
 
   it('saves into AIUSAGE_REPORT_DIR when it is set, expanding a leading ~/', async () => {
