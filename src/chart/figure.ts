@@ -620,8 +620,8 @@ function legendsFor(
     ...(view.kind === 'mix'
       ? tokenClassKey(layout.left, top)
       : view.kind === 'share'
-        ? legend(view.of === 'models' ? modelSeries : series, top, width, 'tokens', layout)
-        : legend(series, top, width, view.measure, layout)),
+        ? legend(view.of === 'models' ? modelSeries : series, top, width, 'tokens', layout, true)
+        : legend(series, top, width, view.measure, layout, true)),
     '</g>',
   ]);
 }
@@ -650,9 +650,11 @@ function legend(
   width: number,
   measure: Measure,
   layout: Layout,
+  scrubbed = false,
 ): string[] {
   const margin = layout.left;
   const parts: string[] = ['<g data-part="legend">'];
+  const format = (value: number) => (measure === 'cost' ? wholeUsd(value) : compactTokens(value));
   // Fixed tracks, so a short legend stays packed at the left rather than spread out.
   const columns = layout.legendColumns;
   const columnWidth = (width - margin - (layout.narrow ? 8 : 92)) / columns;
@@ -661,12 +663,27 @@ function legend(
     const x = margin + (index % columns) * columnWidth;
     const y = top + Math.floor(index / columns) * LEGEND_ROW;
     const label = truncate(entry.label, layout.legendLabel);
-    const amount = measure === 'cost' ? wholeUsd(entry.costTotal) : compactTokens(entry.tokenTotal);
+    const amount = format(measure === 'cost' ? entry.costTotal : entry.tokenTotal);
+    // On the page the amount is the sum through the cards' as-of day: one label
+    // before the first period, then one through each period (the page script).
+    let running = 0;
+    const cumulative = scrubbed
+      ? [
+          format(0),
+          ...(measure === 'cost' ? entry.cost : entry.tokens).map((one) => {
+            running += one;
+            return format(running);
+          }),
+        ]
+      : [];
+    const amountText = text(x + 18, y + 15, amount, { size: 11.5, fill: TOKEN.subtle });
     parts.push(
       // The mark, in the series colour, is the key: no swatch beside it.
       vendorMark(entry.vendor, x, y - 11, 12, inkOf(entry.colour)),
       text(x + 18, y, label, { size: 12, fill: TOKEN.body }),
-      text(x + 18, y + 15, amount, { size: 11.5, fill: TOKEN.subtle }),
+      scrubbed
+        ? amountText.replace('<text ', `<text data-cum="${escapeXml(cumulative.join('|'))}" `)
+        : amountText,
     );
   });
   parts.push('</g>');
@@ -779,7 +796,7 @@ function tabsPanel(
   });
   parts.push(
     '</g>',
-    ...axisDates(rows, box, innerRight),
+    ...axisDates(rows, box, innerRight, true),
     '</svg>',
     baseline(box, box.right),
     ...tabButtons(spec.views, box, layout.narrow),
@@ -1255,7 +1272,10 @@ function shareBars(series: readonly Series[], count: number, box: Box, right: nu
   return parts;
 }
 
-function axisDates(rows: readonly ReportRow[], box: Box, right: number): string[] {
+/** Half the width of a 10.5px ISO date label, near enough to keep it in the plot. */
+const DATE_HALF_WIDTH = 30;
+
+function axisDates(rows: readonly ReportRow[], box: Box, right: number, clipped = false): string[] {
   if (rows.length === 0) return [];
   const { centre } = slots(rows.length, box.left, right);
   // Label at most one period per ~85px (about 8 across a full-width panel); a
@@ -1267,17 +1287,21 @@ function axisDates(rows: readonly ReportRow[], box: Box, right: number): string[
   // only when the stride has not already put a label next to it. Drawing both
   // overprints two dates into an unreadable smear at the right edge.
   const labelLast = last % stride >= stride / 2;
-  return rows.flatMap((row, index) =>
-    index % stride === 0 || (index === last && labelLast)
-      ? [
-          text(round(centre(index)), box.bottom + 18, row.period, {
-            size: 10.5,
-            fill: TOKEN.muted,
-            anchor: 'middle',
-          }),
-        ]
-      : [],
-  );
+  // In the page's pane a date centred within half its width of the edge would
+  // be cut off, so it is left out there.
+  const fits = (index: number) =>
+    !clipped ||
+    (centre(index) - DATE_HALF_WIDTH >= box.left && centre(index) + DATE_HALF_WIDTH <= right);
+  return rows.flatMap((row, index) => {
+    if (!((index % stride === 0 || (index === last && labelLast)) && fits(index))) return [];
+    const label = text(round(centre(index)), box.bottom + 18, row.period, {
+      size: 10.5,
+      fill: TOKEN.muted,
+      anchor: 'middle',
+    });
+    // The pane's script hides a date the panned view would cut in half.
+    return [clipped ? label.replace('<text ', '<text data-date ') : label];
+  });
 }
 
 /**

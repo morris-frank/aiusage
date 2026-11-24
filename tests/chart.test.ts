@@ -662,6 +662,14 @@ describe('report figure', () => {
     expect(svg).toContain('Cost provenance and incomplete-source status');
   });
 
+  it('gives the page legend a running sum per period, so the scrub can show it through any day', () => {
+    const rows = [1, 2, 3].map((day) => row(`2026-07-0${day}`, { anthropic: 2 }));
+    const svg = renderReportSvg(report(rows), { ...OPTIONS, interactive: true });
+    expect(svg).toContain('data-cum="$0|$2|$4|$6"');
+    // The static figure has no scrub and carries no running sums.
+    expect(renderReportSvg(report(rows), OPTIONS)).not.toContain('data-cum');
+  });
+
   it('never overprints two dates at the right edge of the axis', () => {
     // 30 periods → a stride of 4, so the stride's last label lands on index 28.
     // Labelling index 29 as well would smear two dates on top of each other.

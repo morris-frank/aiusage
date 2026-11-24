@@ -329,10 +329,14 @@ for (const pane of document.querySelectorAll('svg[data-scroll]')) {
   const [start, top, width, height] = pane.getAttribute('viewBox').split(' ').map(Number);
   const min = Number(pane.dataset.scroll);
   let x = start;
+  const dates = [...pane.querySelectorAll('text[data-date]')].map((date) => [date, Number(date.getAttribute('x'))]);
   const pan = (to) => {
     x = Math.min(start, Math.max(min, to));
     pane.setAttribute('viewBox', x + ' ' + top + ' ' + width + ' ' + height);
+    // A date the view would cut in half is hidden rather than shown clipped.
+    for (const [date, at] of dates) date.style.visibility = at - 30 < x || at + 30 > x + width ? 'hidden' : '';
   };
+  pan(start);
   // Only the cards' scrub moves the pane: it keeps the as-of day's column in view.
   pane.addEventListener('reveal', (event) => {
     const [from, to] = event.detail;
@@ -347,7 +351,7 @@ function headerBlock(report: PeriodReport, options: ChartOptions): string {
   const { since, until } = report.meta.range;
   return `<div class="masthead"><h1>${escapeXml(titleOf(options))}</h1>
 <span class="since" title="${escapeXml(`${since} to ${until}`)}">since ${escapeXml(since)}</span>
-<span class="generated">generated ${escapeXml(report.meta.generatedAt)}</span></div>
+<span class="generated">generated ${escapeXml(`${report.meta.generatedAt.slice(0, 16).replace('T', ' ')} UTC`)}</span></div>
 <div class="rule"></div>`;
 }
 

@@ -788,11 +788,21 @@ const mark = (at) => {
 const tableRows = [...document.querySelectorAll('tr[data-period]')];
 const asOfDays = cards.length ? JSON.parse(cards[0].dataset.card).days : [];
 let topDay;
+// The figure's legend amounts: summed through the as-of day, the total at the end.
+const legendAmounts = [...document.querySelectorAll('text[data-cum]')].map((text) => ({
+  text,
+  labels: text.dataset.cum.split('|'),
+  periods: text.closest('svg[data-view]').querySelector('rect[data-asof]').dataset.asof.split(' '),
+}));
 const follow = (at) => {
   const day = at < highest - 0.01 ? asOfDays[Math.max(0, Math.round(at))] : undefined;
   if (day === topDay) return;
   topDay = day;
   for (const row of tableRows) row.hidden = day !== undefined && row.dataset.period > day;
+  for (const { text, labels, periods } of legendAmounts) {
+    const through = day === undefined ? periods.length : periods.filter((period) => period <= day).length;
+    text.textContent = labels[through];
+  }
 };
 if (cards.length) scrub(cards, lowest, highest, (at) => { for (const paint of painters) paint(at); mark(at); follow(at); });
 `;
