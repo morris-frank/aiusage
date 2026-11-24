@@ -511,8 +511,9 @@ describe('the local source and the figure', () => {
     expect(await run(cli)).toBe(0);
     const svg = out.join('\n');
     expect(svg).toContain('LLM spend by agent');
-    expect(svg).toContain('claude');
-    expect(svg).toContain('codex');
+    // Agent ids are drawn in the product's own spelling.
+    expect(svg).toContain('>Claude Code<');
+    expect(svg).toContain('>Codex<');
     // "ccusage" still legitimately names the tool in the caption's provenance
     // prose ("...restated from ccusage's own calculation..."); it must not
     // appear as its own legend/chart data label (an isolated text node).

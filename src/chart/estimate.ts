@@ -318,8 +318,10 @@ export function estimateCard(
   </div>`;
 
   if (kind === 'total') {
-    // Through `until`, today's partial day included, so the first paint is the total.
-    const { since, until } = report.meta.range;
+    // Through the last complete day, as the rate is, so every card moves on the
+    // same days; today's partial spend is left to the table.
+    const { since } = report.meta.range;
+    const until = model.days.at(-1) ?? since;
     const byDay = new Map(report.daily?.map((row) => [row.period, row.totalCost ?? 0]));
     const days: string[] = [];
     for (let day = since; day <= until; day = addDays(day, 1)) days.push(day);
@@ -340,7 +342,7 @@ export function estimateCard(
     const paidPath = paidCum ? cumulativePath(paidCum, at) : null;
     return host(
       'Total cost',
-      `Cumulative ${report.totals.costSource} cost at API rates${paid ? ' (dark) and actually paid (grey), each as a share of its own total' : ''}, ${since} to ${until}; today is partial.`,
+      `Cumulative ${report.totals.costSource} cost at API rates${paid ? ' (dark) and actually paid (grey), each as a share of its own total' : ''}, ${since} to ${until}, the last complete day.`,
       format(path.value),
       short(days[at] ?? ''),
       {
@@ -353,18 +355,19 @@ export function estimateCard(
         first: -1,
         last: at,
       },
-      `<path data-part="area" d="${path.area}" fill="${TOKEN.accentSoft}"/>${
+      `${
         paidPath
-          ? `<path data-part="paid" d="${paidPath.line}" fill="none" stroke="${PAID_INK}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`
+          ? `<path data-part="paid" d="${paidPath.line}" fill="none" stroke="${PAID_INK}" stroke-width="2.5" vector-effect="non-scaling-stroke"/>`
           : ''
-      }<path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="1.25" vector-effect="non-scaling-stroke"/>`,
+      }<path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="2.5" vector-effect="non-scaling-stroke"/>`,
       paid,
     );
   }
 
   if (kind === 'price' || kind === 'leverage') {
     // Same days as the total card, so the shared as-of day means the same thing.
-    const { since, until } = report.meta.range;
+    const { since } = report.meta.range;
+    const until = model.days.at(-1) ?? since;
     const days: string[] = [];
     for (let day = since; day <= until; day = addDays(day, 1)) days.push(day);
     const cost = days.map(() => 0);
@@ -469,11 +472,11 @@ export function estimateCard(
           ? bands
               .map(
                 (band) =>
-                  `<path data-part="band" d="${bandPath(band.lower, band.upper, first, last)}" fill="${band.colour}" fill-opacity="0.35"><title>${escapeXml(band.name)}: share of tokens</title></path>`,
+                  `<path data-part="band" d="${bandPath(band.lower, band.upper, first, last)}" fill="${band.colour}"><title>${escapeXml(band.name)}: share of tokens</title></path>`,
               )
               .join('')
-          : `<path data-part="area" d="${path.area}" fill="${TOKEN.accentSoft}"/>`
-      }<path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="1.25" vector-effect="non-scaling-stroke"/>`,
+          : ''
+      }<path data-part="line" d="${path.line}" fill="none" stroke="${TOKEN.ink}" stroke-width="${kind === 'leverage' ? 2.5 : 1.25}" vector-effect="non-scaling-stroke"/>`,
     );
   }
 
@@ -622,6 +625,7 @@ const cumulativePath = ${cumulativePath.toString()};
 const levelPath = ${levelPath.toString()};
 const bandPath = ${bandPath.toString()};
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const dash = matchMedia('(min-width: 1001px) and (min-height: 640px)');
 const shortDay = (day) => new Date(day + 'T00:00:00Z').toLocaleString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const amount = (unit, n) => unit === 'usd' ? n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
   : Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
@@ -644,9 +648,7 @@ function scrub(hosts, first, last, paint) {
     target = Math.min(last, Math.max(first, to));
     if (!frame) frame = requestAnimationFrame(tick);
   };
-  for (const host of hosts) {
-  host.addEventListener('wheel', (event) => {
-    if (document.activeElement !== host) return;
+  const wheel = (event) => {
     const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
     // Down or left is back in time, at 40 px a day.
     const next = Math.min(last, Math.max(first, target + (event.deltaX - event.deltaY) * scale / 40));
@@ -657,6 +659,15 @@ function scrub(hosts, first, last, paint) {
     held = now;
     event.preventDefault();
     go(next);
+  };
+  // On the desktop dashboard nothing scrolls, so the wheel anywhere is the scrub;
+  // a figure pane panning sideways or the open provenance keeps its own.
+  addEventListener('wheel', (event) => {
+    if (dash.matches && !event.defaultPrevented && !event.target.closest?.('.provenance')) wheel(event);
+  }, { passive: false });
+  for (const host of hosts) {
+  host.addEventListener('wheel', (event) => {
+    if (!dash.matches && document.activeElement === host) wheel(event);
   }, { passive: false });
   host.addEventListener('keydown', (event) => {
     const by = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1, PageDown: -7, PageUp: 7 }[event.key];
@@ -671,7 +682,7 @@ function scrub(hosts, first, last, paint) {
 }
 // The header cards share one as-of day: scrolling any of them moves them all.
 // They start together at the latest first day (the rate needs a week of days)
-// and each clamps to its own last day (the total runs through today).
+// and end together on the last complete day.
 const cards = [...document.querySelectorAll('[data-card]')];
 const painters = [];
 let lowest = -Infinity, highest = -Infinity;
@@ -689,7 +700,7 @@ for (const card of cards) {
     painters.push((time) => {
       const at = clamp(time);
       const path = cumulativePath(data.cum, at);
-      line.setAttribute('d', path.line); area.setAttribute('d', path.area);
+      line.setAttribute('d', path.line); area?.setAttribute('d', path.area);
       value.textContent = amount(data.unit, path.value);
       date.textContent = dayOf(at);
       if (data.paidCum) {
@@ -746,6 +757,17 @@ const mark = (at) => {
     m.pane.dispatchEvent(new CustomEvent('reveal', { detail: [x, x + m.slot] }));
   }
 };
-if (cards.length) scrub(cards, lowest, highest, (at) => { for (const paint of painters) paint(at); mark(at); });
+// The table follows: the as-of day is its top row; at the end every row shows,
+// today's partial one included.
+const tableRows = [...document.querySelectorAll('tr[data-period]')];
+const asOfDays = cards.length ? JSON.parse(cards[0].dataset.card).days : [];
+let topDay;
+const follow = (at) => {
+  const day = at < highest - 0.01 ? asOfDays[Math.max(0, Math.round(at))] : undefined;
+  if (day === topDay) return;
+  topDay = day;
+  for (const row of tableRows) row.hidden = day !== undefined && row.dataset.period > day;
+};
+if (cards.length) scrub(cards, lowest, highest, (at) => { for (const paint of painters) paint(at); mark(at); follow(at); });
 `;
 }

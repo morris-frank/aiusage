@@ -147,6 +147,28 @@ function contrastOnWhite(rgb: readonly number[]): number {
   return 1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05);
 }
 
+/** Products' own spelling of the ids ccusage and the platforms report in lower case. */
+const CANONICAL_NAMES: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openrouter: 'OpenRouter',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  amp: 'Amp',
+  copilot: 'Copilot',
+  cursor: 'Cursor',
+  vertex: 'Vertex AI',
+  bedrock: 'Bedrock',
+  pi: 'pi',
+};
+
+/** A series name as the product spells it; an unknown name is left as reported. */
+export function canonicalName(name: string): string {
+  return CANONICAL_NAMES[name.toLowerCase()] ?? name;
+}
+
 /**
  * Which mark to draw beside a series name.
  *

@@ -57,6 +57,7 @@ import type { SplitDimension } from '../aggregate.js';
 import type { BillingPlan } from '../config.js';
 import type { DimensionBreakdown, PeriodReport, ReportRow } from '../report.js';
 import {
+  canonicalName,
   displayModel,
   escapeXml,
   inkOf,
@@ -160,6 +161,8 @@ const MIN_SLOT = 13;
 const PANEL_HEIGHT = 150;
 const PANEL_GAP = 74;
 const RANK_ROW_HEIGHT = 22;
+/** A legend entry is two lines: mark and name, then its total. */
+const LEGEND_ROW = 36;
 /** Models drawn in the model-share view before the tail folds into "Other". */
 const SHARE_MODELS = 7;
 
@@ -184,8 +187,8 @@ function layoutFor(width: number): Layout {
         left: 60,
         rightMargin: 84,
         rankLeft: 128,
-        legendColumns: 2,
-        legendLabel: 12,
+        legendColumns: 3,
+        legendLabel: 14,
         // The mark names the line; on a phone only the amount follows it.
         endLabel: 0,
         rankLabel: 18,
@@ -195,8 +198,8 @@ function layoutFor(width: number): Layout {
         left: 76,
         rightMargin: 168,
         rankLeft: 210,
-        legendColumns: 4,
-        legendLabel: 24,
+        legendColumns: 8,
+        legendLabel: 14,
         endLabel: 16,
         rankLabel: 30,
       };
@@ -247,11 +250,12 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
     1,
     Math.ceil(Math.max(series.length, modelSeries.length) / layout.legendColumns),
   );
-  const legendTop = withHeader ? 126 : 30;
-  const firstPanelTop = legendTop + legendRows * 22 + 30;
+  const firstPanelTop = withHeader ? 150 : 54;
+  // The legend sits under the first row, the per-period plot it keys.
+  let legendTop = firstPanelTop;
   const placed: { spec: PanelSpec; box: Box }[] = [];
   let panelTop = firstPanelTop;
-  for (const panelRow of panelRows) {
+  for (const [rowIndex, panelRow] of panelRows.entries()) {
     const panelHeight = Math.max(...panelRow.map(panelHeightOf));
     const bottom = panelTop + panelHeight;
     const split = Math.round(width * SPLIT);
@@ -269,8 +273,13 @@ export function renderReportSvg(report: PeriodReport, options: ChartOptions): st
       placed.push({ spec, box: { top: panelTop, bottom, left, right: columnRight } });
     });
     panelTop = bottom + PANEL_GAP;
+    if (rowIndex === 0) {
+      legendTop = bottom + 52;
+      panelTop = legendTop + legendRows * LEGEND_ROW + PANEL_GAP - 20;
+    }
   }
-  const captionTop = (placed.at(-1)?.box.bottom ?? firstPanelTop) + 58;
+  const legendBottom = legendTop + (legendRows - 1) * LEGEND_ROW + 15;
+  const captionTop = Math.max((placed.at(-1)?.box.bottom ?? firstPanelTop) + 58, legendBottom + 40);
   // The page carries the caption as text beside the figure (`provenanceDetails`),
   // so its figure ends under the last axis instead of a hidden caption's height.
   const captionText = options.interactive
@@ -496,7 +505,7 @@ function buildSeries(
 
         return {
           key: id,
-          label: displayLabel,
+          label: canonicalName(displayLabel),
           colour: TOKEN.highlight as string,
           vendor,
           cost: entry.cost,
@@ -640,19 +649,20 @@ function legend(
 ): string[] {
   const margin = layout.left;
   const parts: string[] = ['<g data-part="legend">'];
-  const columns = Math.min(layout.legendColumns, Math.max(1, series.length));
+  // Fixed tracks, so a short legend stays packed at the left rather than spread out.
+  const columns = layout.legendColumns;
   const columnWidth = (width - margin - (layout.narrow ? 8 : 92)) / columns;
 
   series.forEach((entry, index) => {
     const x = margin + (index % columns) * columnWidth;
-    const y = top + Math.floor(index / columns) * 22;
+    const y = top + Math.floor(index / columns) * LEGEND_ROW;
     const label = truncate(entry.label, layout.legendLabel);
     const amount = measure === 'cost' ? wholeUsd(entry.costTotal) : compactTokens(entry.tokenTotal);
     parts.push(
       // The mark, in the series colour, is the key: no swatch beside it.
       vendorMark(entry.vendor, x, y - 11, 12, inkOf(entry.colour)),
       text(x + 18, y, label, { size: 12, fill: TOKEN.body }),
-      text(x + 18 + labelWidth(label) + 8, y, amount, { size: 11.5, fill: TOKEN.subtle }),
+      text(x + 18, y + 15, amount, { size: 11.5, fill: TOKEN.subtle }),
     );
   });
   parts.push('</g>');
@@ -729,6 +739,9 @@ function tabsPanel(
   parts.push(
     `<svg x="${box.left}" y="${top}" width="${visible}" height="${height}" viewBox="${innerRight - visible} ${top} ${visible} ${height}"${inner > visible ? ` data-scroll="${box.left}"` : ''}>`,
     `<rect x="${box.left}" y="${top}" width="${inner}" height="${height}" fill="#fff" fill-opacity="0"/>`,
+    // The plot surface is dotted; the dots pan with the bars. Ids differ per layout.
+    `<defs><pattern id="aiusage-dots${layout.narrow ? '-narrow' : ''}" width="8" height="8" patternUnits="userSpaceOnUse"><circle cx="4" cy="4" r="0.8" fill="#000" fill-opacity="0.06"/></pattern></defs>`,
+    `<rect x="${box.left}" y="${box.top}" width="${inner}" height="${box.bottom - box.top}" fill="url(#aiusage-dots${layout.narrow ? '-narrow' : ''})"/>`,
     // The header cards' as-of day; the page script places and shows it.
     `<rect data-asof="${rows.map((row) => row.period).join(' ')}" data-left="${box.left}" data-slot="${slot}" x="${box.left}" y="${box.top}" width="${slot}" height="${box.bottom - box.top}" fill="${TOKEN.ink}" fill-opacity="0.08" opacity="0"/>`,
     '<g data-layer="mix">',

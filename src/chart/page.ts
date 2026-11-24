@@ -66,10 +66,13 @@ ${renderReportSvg(report, { ...options, header: false, interactive: true, width:
 <figure class="narrow">
 ${renderReportSvg(report, { ...options, header: false, interactive: true, width: 420 })}
 </figure>
-${provenanceDetails(report, options)}
 ${periodTable(report, rows, options)}
+<details class="provenance">
+<summary>Sources, notices and method</summary>
 ${sourceTable(report, options)}
 ${noticeList(report)}
+${provenanceDetails(report, options)}
+</details>
 </main>
 <script>
 ${tabScript()}
@@ -101,9 +104,9 @@ svg[data-view] { touch-action: pan-y; }
 [data-scroll] { cursor: grab; }
 [data-scroll]:active { cursor: grabbing; }
 
-/* A bare SVG draws its provenance as a caption; the page's figure leaves it to
-   the details below, which print opens (see the script). */
-.provenance { margin: 14px 0 0; border-top: 1px solid var(--grid); }
+/* Sources, notices and the figure's provenance, collapsed at the foot; print
+   opens it (see the script). */
+.provenance { margin: 44px 0 0; border-top: 1px solid var(--grid); }
 .provenance summary { cursor: pointer; color: var(--muted); font-size: 12.5px; padding: 8px 0; }
 .provenance p { margin: 8px 0 0; }
 
@@ -118,9 +121,9 @@ h2 + .note { margin: 0 0 14px; }
 
 /* Summary strip — hairline cards, flat. Numbers light and large; one Mint value. */
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.card { border: 1px solid var(--grid); border-radius: 4px; padding: 16px 18px; }
-/* A projection is modelled, not measured: dashed, so it never reads as billed. */
-.card.projected { border-style: dashed; border-color: var(--rule); }
+.card { border: 1px solid #0000001a; border-radius: 4px; padding: 16px 18px; background-color: #fff;
+        background-image: radial-gradient(circle, #0000000f 0.8px, transparent 0.9px);
+        background-size: 8px 8px; }
 .cards + .cards { margin-top: 12px; }
 /* A row with one wide card keeps the first row's tracks, so it lines up under it. */
 .cards.fill { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
@@ -222,8 +225,23 @@ td.lo { color: var(--subtle); background: var(--cream); }
   .bar { height: 4px; }
 }
 
+/* Desktop is a dashboard: one screen, no page scroll, so the wheel is always the
+   time scrub (estimateScript); the table shows the rows that fit, from the as-of
+   day down. The query is repeated in that script. */
+@media (min-width: 1001px) and (min-height: 640px) {
+  html, body { height: 100%; overflow: hidden; }
+  main { height: 100vh; box-sizing: border-box; padding: 24px 28px 12px;
+         display: flex; flex-direction: column; }
+  main > * { flex: none; }
+  figure { margin-top: 20px; }
+  main > .table-scroll { flex: 1 1 0; min-height: 0; overflow: hidden; margin-top: 12px; }
+  .provenance { margin-top: 8px; }
+  .provenance[open] { max-height: 40vh; overflow: auto; }
+}
+
 @media print {
-  main { padding: 0; max-width: none; }
+  html, body { height: auto; overflow: visible; }
+  main { padding: 0; max-width: none; height: auto; display: block; }
   thead th { position: static; }
   h2 { break-after: avoid; }
   tbody tr { break-inside: avoid; }
@@ -418,8 +436,7 @@ function cards(report: PeriodReport, options: ChartOptions): string {
           ? {
               line: paidLine(paid, 'actually paid'),
               daily: paidDaily,
-              rest:
-                paid.atApiRates.length > 0 ? ` · ${paid.atApiRates.join(', ')} at API rates` : '',
+              rest: '',
             }
           : undefined,
       )
@@ -491,9 +508,7 @@ function paidOf(
 }
 
 function paidLine(paid: Paid, noun: string, suffix = ''): string {
-  const usd = wholeUsd(paid.usd);
-  const rest = paid.atApiRates.length > 0 ? ` · ${paid.atApiRates.join(', ')} at API rates` : '';
-  return `≈ ${usd}${suffix} ${noun}${rest}`;
+  return `≈ ${wholeUsd(paid.usd)}${suffix} ${noun}`;
 }
 
 /** Days of the run rate: four whole weeks, so weekends weigh what they do in a month. */
@@ -643,7 +658,7 @@ function periodTable(
         number(row.cacheCreationTokens, `col-cache-w${tails.cacheW(row.cacheCreationTokens)}`),
         number(row.cacheReadTokens, `col-cache-r${tails.cacheR(row.cacheReadTokens)}`),
       ];
-      return `  <tr>${cells.join('')}</tr>`;
+      return `  <tr data-period="${escapeXml(row.period)}">${cells.join('')}</tr>`;
     })
     .join('\n');
 
@@ -684,10 +699,8 @@ function periodTable(
     'col-cache-r',
   ];
 
-  return `<h2>${escapeXml(periodNoun(report, true))}</h2>
-<div class="table-scroll">
-<table>
-<caption>One row per ${noun.toLowerCase()} with usage, newest first. Cost bars share a common scale; the four-segment bar shows token mix for that ${noun.toLowerCase()} (input, output, cache write, cache read). In each token-class column the top tenth of ${periodNoun(report, true).toLowerCase()} is shaded and the bottom tenth dimmed.</caption>
+  return `<div class="table-scroll">
+<table aria-label="${escapeXml(periodNoun(report, true))}, newest first">
 <thead><tr>${head
     .map(
       (label, index) =>
@@ -789,10 +802,8 @@ function number(value: number, cls?: string): string {
 function provenanceDetails(report: PeriodReport, options: ChartOptions): string {
   const lines = figureCaption(report, options);
   if (lines.length === 0) return '';
-  return `<details class="provenance">
-<summary>Method and provenance</summary>
-${lines.map((line) => `<p class="note">${escapeXml(line)}</p>`).join('\n')}
-</details>`;
+  return `<h2>Method and provenance</h2>
+${lines.map((line) => `<p class="note">${escapeXml(line)}</p>`).join('\n')}`;
 }
 
 function costCell(cost: number, max: number): string {

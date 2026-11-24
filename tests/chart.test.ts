@@ -352,7 +352,7 @@ describe('report figure', () => {
     expect(html).toContain('background: #fff');
     expect(html).toContain('class="left period">2026-07-25<');
     expect(html).toContain('some-model');
-    expect(html).toContain('<caption>One row per day with usage, newest first.');
+    expect(html).toContain('<tr data-period="2026-07-25">');
     expect(html).toContain('<th scope="col"');
   });
 
@@ -462,7 +462,7 @@ describe('report figure', () => {
   it('spoilers the provenance caption on the page, and the page figure carries no hidden copy', () => {
     const html = renderReportHtml(report([row('2026-07-25', { anthropic: 2 })]), OPTIONS);
     expect(html).toContain('<details class="provenance">');
-    expect(html).toContain('<summary>Method and provenance</summary>');
+    expect(html).toContain('<summary>Sources, notices and method</summary>');
     expect(html).toContain('Cost provenance: reported');
     // A hidden caption would still take the figure's height; print opens the details instead.
     expect(html).not.toContain('data-part="caption"');
@@ -492,8 +492,8 @@ describe('report figure', () => {
     ]);
     const html = renderReportHtml(data, { ...OPTIONS, billing });
     // 10 days of a $36.50/month plan is $12; OpenRouter's $10 metered; Gemini's
-    // $5 has no stated plan, so it stays at API rates and is named.
-    expect(html).toContain('≈ $27 actually paid · gemini at API rates');
+    // $5 has no stated plan, so it stays in the sum at API rates.
+    expect(html).toContain('≈ $27 actually paid');
     // The page script names the phrase too, so look for it as rendered text.
     expect(renderReportHtml(data, OPTIONS)).not.toMatch(/>≈ [^<]* actually paid/);
   });
