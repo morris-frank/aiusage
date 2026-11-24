@@ -197,8 +197,9 @@ export type CardKind = 'rate' | 'total' | 'price' | 'leverage';
 const PAID_INK = '#939393';
 /** The thinnest price band drawn, in the card's 100 vertical units (about 2px). */
 const BAND_FLOOR = 3;
-/** How far the price bands stop under the 2.5px price line, in the same units. */
-const LINE_CLEARANCE = 2;
+/** How far the price bands stop under the 2.5px price line, in the same units: under
+    its half width, so the line overlaps them a little rather than leave a gap. */
+const LINE_CLEARANCE = 0.8;
 
 /** Catmull-Rom through whole-day keyframes: the scrub moves between days on a smooth curve. */
 export function interp(series: number[], at: number): number {
